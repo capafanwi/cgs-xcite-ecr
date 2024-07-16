@@ -25,7 +25,7 @@ spec:
       - name: logLocation
         value: "logs"
       - name: version
-        value: "2.2.11"
+        value: "2.2.12"
       - name: retryCount
         value: 2
       - name: worldInfoLocation
