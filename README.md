@@ -2,7 +2,7 @@
 
 ## Architecture Diagram - subject to progressive changes 
 
-![version-1](images/version-1.png)
+![version-1](docs/version-1.png)
 
 
 ## Create an ECR Repo: xcite
