@@ -51,7 +51,7 @@ jobs:
         sed -i "s/value: \"[0-9.]*\"/value: \"$new_osm_version\"/g" argo-artifacts/recon-pipeline.yaml
         sed -i "s/value: \"[0-9.]*\"/value: \"$new_gpu_version\"/g" argo-artifacts/source-pipeline.yaml
         sed -i "s/value: \"[0-9.]*\"/value: \"$new_world_version\"/g" argo-artifacts/world-pipeline.yaml
-        echo "Updated workflow pipeline yamls with new versions"
+        echo "Updated recon-pipeline.yaml and source-pipeline.yaml"
 
     - name: Commit updated files
       run: |
@@ -74,7 +74,20 @@ jobs:
     - name: Login to Amazon ECR
       id: login-ecr
       uses: aws-actions/amazon-ecr-login@v1
-    
+
+    - name: Build and Push worker image
+      run: |
+        cd docker/worker
+        docker build -t ${{ steps.bump_versions.outputs.new_worker_version }} .
+        IMAGE_TAG=${{ steps.bump_versions.outputs.new_worker_version }}
+        ECR_REGISTRY=${{ secrets.AWS_ACCOUNT_NUMBER }}.dkr.ecr.us-east-1.amazonaws.com
+        REPOSITORY=xcite-worker
+        docker tag $IMAGE_TAG $ECR_REGISTRY/$REPOSITORY:$IMAGE_TAG
+        docker push $ECR_REGISTRY/$REPOSITORY:$IMAGE_TAG
+        docker tag $IMAGE_TAG $ECR_REGISTRY/$REPOSITORY:latest
+        docker push $ECR_REGISTRY/$REPOSITORY:latest
+        cd ../..
+
     - name: Build and Push cpu_tasks image
       run: |
         cd docker/cpu_tasks
@@ -104,8 +117,8 @@ jobs:
     - name: Build and Push OSM image
       run: |
         cd docker/OSM
-        docker build -t ${{ steps.bump_versions.outputs.new_version }} .
-        IMAGE_TAG=${{ steps.bump_versions.outputs.new_version }}
+        docker build -t ${{ steps.bump_versions.outputs.new_osm_version }} .
+        IMAGE_TAG=${{ steps.bump_versions.outputs.new_osm_version }}
         ECR_REGISTRY=${{ secrets.AWS_ACCOUNT_NUMBER }}.dkr.ecr.us-east-1.amazonaws.com
         REPOSITORY=xcite-osm-osmosis
         docker tag $IMAGE_TAG $ECR_REGISTRY/$REPOSITORY:$IMAGE_TAG
