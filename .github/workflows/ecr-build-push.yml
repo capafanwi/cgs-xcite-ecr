@@ -113,3 +113,5 @@ jobs:
         docker tag $IMAGE_TAG $ECR_REGISTRY/$REPOSITORY:latest
         docker push $ECR_REGISTRY/$REPOSITORY:latest
         cd ../..
+
+    
