@@ -19,9 +19,9 @@ jobs:
       run: |
         chmod +x scripts/bump_version_osm.sh
         ./scripts/bump_version_osm.sh
-        new_osm_version=$(cat VERSION-OSM)
-        echo "new_osm_version=$new_osm_version" >> $GITHUB_ENV
-        echo "::set-output name=new_osm_version::$new_osm_version"
+        new_version=$(cat VERSION-OSM)
+        echo "new_version=$new_version" >> $GITHUB_ENV
+        echo "::set-output name=new_version::$new_version"
 
         chmod +x scripts/bump_version_world.sh
         ./scripts/bump_version_world.sh
@@ -43,12 +43,12 @@ jobs:
 
     - name: Update YAML files with new versions
       run: |
-        new_osm_version=$(cat VERSION-OSM)
+        new_version=$(cat VERSION-OSM)
         new_world_version=$(cat VERSION-WORLD)
         new_cpu_version=$(cat VERSION-CPU-TASK)
         new_gpu_version=$(cat VERSION-GPU-TASK)
         echo "Updating pipeline yamls with versions new_versions"
-        sed -i "s/value: \"[0-9.]*\"/value: \"$new_osm_version\"/g" argo-artifacts/recon-pipeline.yaml
+        sed -i "s/value: \"[0-9.]*\"/value: \"$new_version\"/g" argo-artifacts/recon-pipeline.yaml
         sed -i "s/value: \"[0-9.]*\"/value: \"$new_gpu_version\"/g" argo-artifacts/source-pipeline.yaml
         sed -i "s/value: \"[0-9.]*\"/value: \"$new_world_version\"/g" argo-artifacts/world-pipeline.yaml
         echo "Updated recon-pipeline.yaml and source-pipeline.yaml"
@@ -58,7 +58,7 @@ jobs:
         git config --global user.name 'capafanwi'
         git config --global user.email 'collins.afanwi@capgemini-gs.com'
         git add VERSION-OSM VERSION-WORLD VERSION-CPU-TASK VERSION-GPU-TASK argo-artifacts/recon-pipeline.yaml argo-artifacts/source-pipeline.yaml argo-artifacts/world-pipeline.yaml
-        git commit -m "Bump versions to ${{ steps.bump_versions.outputs.new_osm_version }}, ${{ steps.bump_versions.outputs.new_world_version }}, ${{ steps.bump_versions.outputs.new_cpu_version }}, and ${{ steps.bump_versions.outputs.new_gpu_version }}" || echo "No changes to commit"
+        git commit -m "Bump versions to ${{ steps.bump_versions.outputs.new_version }}, ${{ steps.bump_versions.outputs.new_world_version }}, ${{ steps.bump_versions.outputs.new_cpu_version }}, and ${{ steps.bump_versions.outputs.new_gpu_version }}" || echo "No changes to commit"
         git stash
         git pull --rebase origin main
         git stash pop || echo "No stashed changes"
@@ -78,8 +78,8 @@ jobs:
     - name: Build and Push worker image
       run: |
         cd docker/worker
-        docker build -t ${{ steps.bump_versions.outputs.new_worker_version }} .
-        IMAGE_TAG=${{ steps.bump_versions.outputs.new_worker_version }}
+        docker build -t ${{ steps.bump_versions.outputs.new_version }} .
+        IMAGE_TAG=${{ steps.bump_versions.outputs.new_version }}
         ECR_REGISTRY=${{ secrets.AWS_ACCOUNT_NUMBER }}.dkr.ecr.us-east-1.amazonaws.com
         REPOSITORY=xcite-worker
         docker tag $IMAGE_TAG $ECR_REGISTRY/$REPOSITORY:$IMAGE_TAG
@@ -117,8 +117,8 @@ jobs:
     - name: Build and Push OSM image
       run: |
         cd docker/OSM
-        docker build -t ${{ steps.bump_versions.outputs.new_osm_version }} .
-        IMAGE_TAG=${{ steps.bump_versions.outputs.new_osm_version }}
+        docker build -t ${{ steps.bump_versions.outputs.new_version }} .
+        IMAGE_TAG=${{ steps.bump_versions.outputs.new_version }}
         ECR_REGISTRY=${{ secrets.AWS_ACCOUNT_NUMBER }}.dkr.ecr.us-east-1.amazonaws.com
         REPOSITORY=xcite-osm-osmosis
         docker tag $IMAGE_TAG $ECR_REGISTRY/$REPOSITORY:$IMAGE_TAG
