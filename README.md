@@ -6,17 +6,17 @@
 
 
 ## Create an ECR Repo: 
-xcite-worker
-xcite-cpu_tasks
-xcite-gpu_tasks
-xcite-osm-osmosis
+- xcite-worker
+- xcite-cpu_tasks
+- xcite-gpu_tasks
+- xcite-osm-osmosis
 
 ## Add the following as secrets: 
 
-AWS_ACCESS_KEY_ID
-AWS_ACCOUNT_NUMBER
-AWS_REGION
-AWS_SECRET_ACCESS_KEY
+- AWS_ACCESS_KEY_ID
+- AWS_ACCOUNT_NUMBER
+- AWS_REGION
+- AWS_SECRET_ACCESS_KEY
 
 
 ## Run image
