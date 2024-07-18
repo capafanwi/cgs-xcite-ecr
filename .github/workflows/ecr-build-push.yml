@@ -1,4 +1,4 @@
-name: Argo CD GitOps CI/CD
+name: XCite CI/CD with Argo
 
 on:
   push:
@@ -7,7 +7,7 @@ on:
 
 jobs:
   build:
-    name: Build and Push the image
+    name: Build and Push the images
     runs-on: ubuntu-latest
 
     steps:
@@ -17,59 +17,52 @@ jobs:
     - name: Bump versions
       id: bump_versions
       run: |
-        chmod +x world/bump_version_world_template.sh
-        ./world/bump_version_world_template.sh
-        new_version=$(cat VERSION-TEMP-WORLD)
+        chmod +x scripts/bump_version_osm.sh
+        ./scripts/bump_version_osm.sh
+        new_version=$(cat VERSION-OSM)
         echo "new_version=$new_version" >> $GITHUB_ENV
         echo "::set-output name=new_version::$new_version"
 
-        chmod +x world/bump_version_world_workflow.sh
-        ./world/bump_version_world_workflow.sh
-        new_world_version=$(cat VERSION-WF-WORLD)
+        chmod +x scripts/bump_version_world.sh
+        ./scripts/bump_version_world.sh
+        new_world_version=$(cat VERSION-WORLD)
         echo "new_world_version=$new_world_version" >> $GITHUB_ENV
         echo "::set-output name=new_world_version::$new_world_version"
 
+        chmod +x scripts/bump_version_cpu_task.sh
+        ./scripts/bump_version_cpu_task.sh
+        new_cpu_version=$(cat VERSION-CPU-TASK)
+        echo "new_cpu_version=$new_cpu_version" >> $GITHUB_ENV
+        echo "::set-output name=new_cpu_version::$new_cpu_version"
+
+        chmod +x scripts/bump_version_gpu_task.sh
+        ./scripts/bump_version_gpu_task.sh
+        new_gpu_version=$(cat VERSION-GPU-TASK)
+        echo "new_gpu_version=$new_gpu_version" >> $GITHUB_ENV
+        echo "::set-output name=new_gpu_version::$new_gpu_version"
+
     - name: Update YAML files with new versions
       run: |
-        new_version=$(cat VERSION-TEMP-WORLD)
-        new_world_version=$(cat VERSION-WF-WORLD)
-        echo "Updating WorkflowTemplate.yaml and worldworkflow.yaml with versions $new_version and $new_world_version"
-        sed -i "s/value: \"[0-9.]*\"/value: \"$new_version\"/g" world/WorkflowTemplate.yaml
-        sed -i "s/value: \"[0-9.]*\"/value: \"$new_world_version\"/g" world/worldworkflow.yaml
-        echo "Updated WorkflowTemplate.yaml and worldworkflow.yaml"
+        new_version=$(cat VERSION-OSM)
+        new_world_version=$(cat VERSION-WORLD)
+        new_cpu_version=$(cat VERSION-CPU-TASK)
+        new_gpu_version=$(cat VERSION-GPU-TASK)
+        echo "Updating pipeline yamls with versions new_versions"
+        sed -i "s/value: \"[0-9.]*\"/value: \"$new_version\"/g" argo-artifacts/recon-pipeline.yaml
+        sed -i "s/value: \"[0-9.]*\"/value: \"$new_gpu_version\"/g" argo-artifacts/source-pipeline.yaml
+        sed -i "s/value: \"[0-9.]*\"/value: \"$new_world_version\"/g" argo-artifacts/world-pipeline.yaml
+        echo "Updated recon-pipeline.yaml and source-pipeline.yaml"
 
     - name: Commit updated files
       run: |
         git config --global user.name 'capafanwi'
         git config --global user.email 'collins.afanwi@capgemini-gs.com'
-        git add VERSION-TEMP-WORLD VERSION-WF-WORLD world/WorkflowTemplate.yaml world/worldworkflow.yaml
-        git commit -m "Bump versions to ${{ steps.bump_versions.outputs.new_version }} and ${{ steps.bump_versions.outputs.new_world_version }}" || echo "No changes to commit"
+        git add VERSION-OSM VERSION-WORLD VERSION-CPU-TASK VERSION-GPU-TASK argo-artifacts/recon-pipeline.yaml argo-artifacts/source-pipeline.yaml argo-artifacts/world-pipeline.yaml
+        git commit -m "Bump versions to ${{ steps.bump_versions.outputs.new_version }}, ${{ steps.bump_versions.outputs.new_world_version }}, ${{ steps.bump_versions.outputs.new_cpu_version }}, and ${{ steps.bump_versions.outputs.new_gpu_version }}" || echo "No changes to commit"
         git stash
         git pull --rebase origin main
         git stash pop || echo "No stashed changes"
         git push origin main
-
-    - name: Build the Docker image
-      run: |
-        cd docker/world-docker
-        docker build -t ${{ steps.bump_versions.outputs.new_version }} .
-
-    - name: Run Trivy vulnerability scanner
-      uses: aquasecurity/trivy-action@master
-      with:
-        image-ref: '${{ steps.bump_versions.outputs.new_version }}'
-        format: 'table'
-        exit-code: '0'
-        ignore-unfixed: true
-        vuln-type: 'os,library'
-        severity: 'MEDIUM,HIGH,CRITICAL'
-        output: 'trivy-report.txt'
-
-    - name: Upload Trivy report
-      uses: actions/upload-artifact@v3
-      with:
-        name: trivy-report
-        path: world/trivy-report.txt
 
     - name: Configure AWS Credentials
       uses: aws-actions/configure-aws-credentials@v1
@@ -82,8 +75,10 @@ jobs:
       id: login-ecr
       uses: aws-actions/amazon-ecr-login@v1
 
-    - name: Tag and Push Docker image to Amazon ECR
+    - name: Build and Push worker image
       run: |
+        cd docker/worker
+        docker build -t ${{ steps.bump_versions.outputs.new_version }} .
         IMAGE_TAG=${{ steps.bump_versions.outputs.new_version }}
         ECR_REGISTRY=${{ secrets.AWS_ACCOUNT_NUMBER }}.dkr.ecr.us-east-1.amazonaws.com
         REPOSITORY=xcite-worker
@@ -91,6 +86,43 @@ jobs:
         docker push $ECR_REGISTRY/$REPOSITORY:$IMAGE_TAG
         docker tag $IMAGE_TAG $ECR_REGISTRY/$REPOSITORY:latest
         docker push $ECR_REGISTRY/$REPOSITORY:latest
+        cd ../..
 
-  # deploy:
-  #   ####
+    - name: Build and Push cpu_tasks image
+      run: |
+        cd docker/cpu_tasks
+        docker build -t ${{ steps.bump_versions.outputs.new_cpu_version }} .
+        IMAGE_TAG=${{ steps.bump_versions.outputs.new_cpu_version }}
+        ECR_REGISTRY=${{ secrets.AWS_ACCOUNT_NUMBER }}.dkr.ecr.us-east-1.amazonaws.com
+        REPOSITORY=xcite-cpu_tasks
+        docker tag $IMAGE_TAG $ECR_REGISTRY/$REPOSITORY:$IMAGE_TAG
+        docker push $ECR_REGISTRY/$REPOSITORY:$IMAGE_TAG
+        docker tag $IMAGE_TAG $ECR_REGISTRY/$REPOSITORY:latest
+        docker push $ECR_REGISTRY/$REPOSITORY:latest
+        cd ../..
+
+    - name: Build and Push gpu_tasks image
+      run: |
+        cd docker/gpu_tasks
+        docker build -t ${{ steps.bump_versions.outputs.new_gpu_version }} .
+        IMAGE_TAG=${{ steps.bump_versions.outputs.new_gpu_version }}
+        ECR_REGISTRY=${{ secrets.AWS_ACCOUNT_NUMBER }}.dkr.ecr.us-east-1.amazonaws.com
+        REPOSITORY=xcite-gpu_tasks
+        docker tag $IMAGE_TAG $ECR_REGISTRY/$REPOSITORY:$IMAGE_TAG
+        docker push $ECR_REGISTRY/$REPOSITORY:$IMAGE_TAG
+        docker tag $IMAGE_TAG $ECR_REGISTRY/$REPOSITORY:latest
+        docker push $ECR_REGISTRY/$REPOSITORY:latest
+        cd ../..
+
+    - name: Build and Push OSM image
+      run: |
+        cd docker/OSM
+        docker build -t ${{ steps.bump_versions.outputs.new_version }} .
+        IMAGE_TAG=${{ steps.bump_versions.outputs.new_version }}
+        ECR_REGISTRY=${{ secrets.AWS_ACCOUNT_NUMBER }}.dkr.ecr.us-east-1.amazonaws.com
+        REPOSITORY=xcite-osm-osmosis
+        docker tag $IMAGE_TAG $ECR_REGISTRY/$REPOSITORY:$IMAGE_TAG
+        docker push $ECR_REGISTRY/$REPOSITORY:$IMAGE_TAG
+        docker tag $IMAGE_TAG $ECR_REGISTRY/$REPOSITORY:latest
+        docker push $ECR_REGISTRY/$REPOSITORY:latest
+        cd ../..

@@ -1,0 +1,3 @@
+resources:
+  - WorkflowTemplate.yaml
+  - source-pipeline.yaml

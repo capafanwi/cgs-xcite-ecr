@@ -8,7 +8,7 @@ metadata:
       templates for world creation and destruction
       must be run with service account that has access to storageclasses and persistentvolumeclaims
       add '--serviceaccount argo-infra' to run workflow
-    workflows.argoproj.io/maintainer: '@cafanwitest@@.com'
+    workflows.argoproj.io/maintainer: '@eredd.carr@reded.com'
     workflows.argoproj.io/tags: world
 spec:
   entrypoint: world-create
@@ -25,7 +25,7 @@ spec:
       - name: logLocation
         value: "logs"
       - name: version
-        value: "2.2.16"
+        value: "2.1.11"  # This will be updated dynamically in the pipeline
       - name: retryCount
         value: 2
       - name: worldInfoLocation

@@ -6,19 +6,19 @@ metadata:
 spec:
   workflowTemplateRef:
     name: world-pipeline
-
   arguments:
     parameters:
       - name: cluster
-      - name: region
-        value: "us-east-1"
+        value: "my-cluster"
       - name: imageRepo
+        value: "my-repo"
       - name: worldName
+        value: "my-world"
       - name: worldId
+        value: "world-123"
       - name: logLocation
-        value: "logs"
+        value: "my-logs"
       - name: version
-        value: "2.2.16"
-      - name: retryCount
-        value: 2
+        value: "2.1.11"
       - name: worldInfoLocation
+        value: "info-location"
