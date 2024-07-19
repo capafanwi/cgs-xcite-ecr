@@ -1,24 +1,1231 @@
 apiVersion: argoproj.io/v1alpha1
+#kind: WorkflowTemplate
 kind: Workflow
 metadata:
-  generateName: world-pipeline-run-
-  namespace: argo
+  #name: world-pipeline
+  generateName: world-pipeline-
+  annotations:
+    workflows.argoproj.io/description: |
+      templates for world creation and destruction
+      must be run with service account that has access to storageclasses and persistentvolumeclaims
+      add '--serviceaccount argo-infra' to run workflow
+    workflows.argoproj.io/maintainer: '@kip.carr@unity3d.com'
+    workflows.argoproj.io/tags: world
 spec:
-  workflowTemplateRef:
-    name: world-pipeline
+  entrypoint: world-create
+  onExit: exit-handler
+
   arguments:
     parameters:
       - name: cluster
-        value: "my-cluster"
+      - name: region
+        value: "us-east-1"
       - name: imageRepo
-        value: "my-repo"
       - name: worldName
-        value: "my-world"
       - name: worldId
-        value: "world-123"
       - name: logLocation
-        value: "my-logs"
+        value: "logs"
       - name: version
         value: "2.1.36"
+      - name: retryCount
+        value: 2
       - name: worldInfoLocation
-        value: "info-location"
+  
+  volumeClaimTemplates:
+  - metadata:
+      name: workdir
+    spec:
+      accessModes: [ "ReadWriteMany" ]
+      storageClassName: efs-sc
+      resources:
+        requests:
+          storage: 50Gi
+
+  templates:
+  - name: world-create
+    dag:
+        tasks:
+        - name: db-creating
+          template: db-update
+          arguments:
+            parameters:
+              [{name: imageRepo,            value: "{{workflow.parameters.imageRepo}}"},
+               {name: region,               value: "{{workflow.parameters.region}}"},
+               {name: worldName,            value: "{{workflow.parameters.worldName}}"},
+               {name: worldId,              value: "{{workflow.parameters.worldId}}"},
+               {name: logLocation,          value: "{{workflow.parameters.logLocation}}"},
+               {name: version,              value: "{{workflow.parameters.version}}"},
+               {name: retryCount,           value: "{{workflow.parameters.retryCount}}"},
+               {name: status,               value: "Creating"},
+               {name: stepCount,            value: "6"}]
+        - name: s3-create
+          template: s3-create
+          depends: db-creating
+          arguments:
+            parameters:
+              [{name: region,               value: "{{workflow.parameters.region}}"},
+               {name: imageRepo,            value: "{{workflow.parameters.imageRepo}}"},
+               {name: worldName,            value: "{{workflow.parameters.worldName}}"},
+               {name: worldId,              value: "{{workflow.parameters.worldId}}"},
+               {name: logLocation,          value: "{{workflow.parameters.logLocation}}"},
+               {name: version,              value: "{{workflow.parameters.version}}"},
+               {name: retryCount,           value: "{{workflow.parameters.retryCount}}"}]
+        - name: efs-create
+          template: efs-create
+          depends: db-creating
+          arguments:
+            parameters:
+              [{name: cluster,              value: "{{workflow.parameters.cluster}}"},
+               {name: region,               value: "{{workflow.parameters.region}}"},
+               {name: imageRepo,            value: "{{workflow.parameters.imageRepo}}"},
+               {name: worldName,            value: "{{workflow.parameters.worldName}}"},
+               {name: worldId,              value: "{{workflow.parameters.worldId}}"},
+               {name: logLocation,          value: "{{workflow.parameters.logLocation}}"},
+               {name: version,              value: "{{workflow.parameters.version}}"},
+               {name: retryCount,           value: "{{workflow.parameters.retryCount}}"}]
+        - name: update-config
+          template: update-config
+          depends: s3-create && efs-create
+          arguments:
+            parameters:
+              [{name: imageRepo,            value: "{{workflow.parameters.imageRepo}}"},
+               {name: region,               value: "{{workflow.parameters.region}}"},
+               {name: worldName,            value: "{{workflow.parameters.worldName}}"},
+               {name: worldId,              value: "{{workflow.parameters.worldId}}"},
+               {name: logLocation,          value: "{{workflow.parameters.logLocation}}"},
+               {name: version,              value: "{{workflow.parameters.version}}"},
+               {name: retryCount,           value: "{{workflow.parameters.retryCount}}"}]
+        - name: world-config-map
+          template: world-config-map
+          depends: update-config
+          arguments:
+            parameters:
+              [{name: imageRepo,            value: "{{workflow.parameters.imageRepo}}"},
+               {name: worldName,            value: "{{workflow.parameters.worldName}}"},
+               {name: worldId,              value: "{{workflow.parameters.worldId}}"},
+               {name: logLocation,          value: "{{workflow.parameters.logLocation}}"},
+               {name: version,              value: "{{workflow.parameters.version}}"},
+               {name: retryCount,           value: "{{workflow.parameters.retryCount}}"}]
+        - name: sync-config
+          template: sync-config
+          depends: update-config && world-config-map
+          arguments:
+            parameters:
+              [{name: imageRepo,            value: "{{workflow.parameters.imageRepo}}"},
+               {name: region,               value: "{{workflow.parameters.region}}"},
+               {name: worldName,            value: "{{workflow.parameters.worldName}}"},
+               {name: worldId,              value: "{{workflow.parameters.worldId}}"},
+               {name: logLocation,          value: "{{workflow.parameters.logLocation}}"},
+               {name: version,              value: "{{workflow.parameters.version}}"},
+               {name: retryCount,           value: "{{workflow.parameters.retryCount}}"},
+               {name: worldInfoLocation,    value: "{{workflow.parameters.worldInfoLocation}}"}]
+
+  - name: db-update
+    inputs:
+        parameters:
+        - name: imageRepo
+        - name: worldName
+        - name: worldId
+        - name: logLocation
+        - name: version
+        - name: retryCount
+        - name: status
+        - name: stepCount
+    retryStrategy:
+        limit: "{{inputs.parameters.retryCount}}"
+        retryPolicy: "OnError"
+    script:
+        image: "{{inputs.parameters.imageRepo}}/worker:{{inputs.parameters.version}}"
+        resources:
+          requests:
+            cpu: 2
+        command: [bash]
+        source: | 
+            set -eo pipefail
+            mkdir -p /data/{{inputs.parameters.logLocation}}
+            exec > >(tee -a /data/{{inputs.parameters.logLocation}}/{{inputs.parameters.worldName}}_{{workflow.name}}_db_update.log) 2>&1
+            
+            start_time=$(date -u +%s)
+              if [[ "{{inputs.parameters.worldName}}" != +([-[:digit:][:lower:]]) ]]; then
+                echo "World name {{inputs.parameters.worldName}} must be all lower case."
+                exit 1
+              fi
+              mkdir -p /data/world/{{inputs.parameters.worldName}}
+
+              echo "Putting data to DB"
+              echo '{"id": {{inputs.parameters.worldId}}, "name": "{{inputs.parameters.worldName}}", "status": "{{inputs.parameters.status}}", "wfid": "{{workflow.name}}", "totalSteps": "{{inputs.parameters.stepCount}}", "completedSteps": "0", "currentStep": "{{pod.name}}" }' | jq '.' > /data/world/{{inputs.parameters.worldName}}/world_info.json
+              cat /data/world/{{inputs.parameters.worldName}}/world_info.json
+              response=$(curl -X 'PUT' 'http://bda-tiledb-ws.bda:8080/world/{{inputs.parameters.worldId}}' -w "%{http_code}" -s -o /data/world/{{inputs.parameters.worldName}}/world_status.json -H 'Content-Type: application/json' -d @/data/world/{{inputs.parameters.worldName}}/world_info.json)
+              if [ "$response" -ne 200 ]; then
+                echo "World {{inputs.parameters.worldName}} with id {{inputs.parameters.worldId}} had http response code "$response""
+                exit "$response"
+              fi
+
+              echo "Sending {{inputs.parameters.status}} world event"
+              #echo '{"id": {{inputs.parameters.worldId}}, "name": "{{inputs.parameters.worldName}}", "status": "{{inputs.parameters.status}}"}' | jq '.' > /data/world/{{inputs.parameters.worldName}}/world_status.json
+              cat /data/world/{{inputs.parameters.worldName}}/world_status.json
+              mosquitto_pub -h 'mosquitto-mqtts.bda' -t worlds -f /data/world/{{inputs.parameters.worldName}}/world_status.json
+              mosquitto_pub -h 'mosquitto-mqtts.bda' -t world/"{{inputs.parameters.worldId}}" -f /data/world/{{inputs.parameters.worldName}}/world_status.json
+            end_time=$(date -u +%s)
+            duration=$((end_time - start_time))
+            formatted_duration=$(printf "%d:%02d:%02d" "$((duration / 3600))" "$(((duration % 3600) / 60))" "$((duration % 60))")
+            echo db-update,, $(date +"%Y-%m-%d %H:%M:%S" -ud "@$start_time"), $(date +"%Y-%m-%d %H:%M:%S" -ud "@$end_time"), $formatted_duration >> /data/{{inputs.parameters.logLocation}}/{{inputs.parameters.worldName}}_{{workflow.name}}_times.csv
+        volumeMounts:
+        - name: workdir
+          mountPath: "/data"
+    tolerations:
+    - key: "s3gis.be/pool"
+      operator: "Equal"
+      value: "worker"
+      effect: "NoSchedule"
+    nodeSelector:
+      node-type: worker
+    metadata:
+      labels:
+        world: "{{inputs.parameters.worldName}}"
+        workflow: "{{workflow.name}}"
+
+  - name: s3-create
+    inputs:
+        parameters:
+        - name: region
+        - name: imageRepo
+        - name: worldName
+        - name: worldId
+        - name: logLocation
+        - name: version
+        - name: retryCount
+    retryStrategy:
+        limit: "{{inputs.parameters.retryCount}}"
+        retryPolicy: "OnError"
+    script:
+        image: "{{inputs.parameters.imageRepo}}/bda-world-storage:{{inputs.parameters.version}}"
+        resources:
+          requests:
+            cpu: 2
+        command: [bash]
+        source: | 
+            set -eo pipefail
+            mkdir -p /data/{{inputs.parameters.logLocation}}
+            exec > >(tee -a /data/{{inputs.parameters.logLocation}}/{{inputs.parameters.worldName}}_{{workflow.name}}_s3_create.log) 2>&1
+            
+            start_time=$(date -u +%s)
+              echo "AWS Credits for S3 Creation:"
+              aws --region {{inputs.parameters.region}} sts get-caller-identity
+              echo "Creating CDK deployment"
+              WORLD_NAME={{inputs.parameters.worldName}} AWS_DEFAULT_REGION={{inputs.parameters.region}} cdk deploy bda-world --require-approval never
+            end_time=$(date -u +%s)
+            duration=$((end_time - start_time))
+            formatted_duration=$(printf "%d:%02d:%02d" "$((duration / 3600))" "$(((duration % 3600) / 60))" "$((duration % 60))")
+            echo s3-create,, $(date +"%Y-%m-%d %H:%M:%S" -ud "@$start_time"), $(date +"%Y-%m-%d %H:%M:%S" -ud "@$end_time"), $formatted_duration >> /data/{{inputs.parameters.logLocation}}/{{inputs.parameters.worldName}}_{{workflow.name}}_times.csv
+        volumeMounts:
+        - name: workdir
+          mountPath: "/data"
+    tolerations:
+    - key: "s3gis.be/pool"
+      operator: "Equal"
+      value: "worker"
+      effect: "NoSchedule"
+    nodeSelector:
+      node-type: worker
+    metadata:
+      labels:
+        world: "{{inputs.parameters.worldName}}"
+        workflow: "{{workflow.name}}"
+
+  - name: efs-create
+    inputs:
+        parameters:
+        - name: cluster
+        - name: region
+        - name: imageRepo
+        - name: worldName
+        - name: worldId
+        - name: logLocation
+        - name: version
+        - name: retryCount
+    retryStrategy:
+        limit: "{{inputs.parameters.retryCount}}"
+        retryPolicy: "OnError"
+    script:
+        image: "{{inputs.parameters.imageRepo}}/bda-world-storage:{{inputs.parameters.version}}"
+        resources:
+          requests:
+            cpu: 2
+        command: [bash]
+        source: | 
+            set -eo pipefail
+            mkdir -p /data/{{inputs.parameters.logLocation}}
+            exec > >(tee -a /data/{{inputs.parameters.logLocation}}/{{inputs.parameters.worldName}}_{{workflow.name}}_efs_create.log) 2>&1
+            
+            start_time=$(date -u +%s)
+              WORLD="{{inputs.parameters.worldName}}"
+              lowercase_world="${WORLD,,}"
+              python3 /app/bin/world-efs-storage.py --region {{inputs.parameters.region}} --cluster {{inputs.parameters.cluster}} --efs_file_system_name {{inputs.parameters.cluster}}-efs-sc --efs_security_group_name {{inputs.parameters.cluster}}-efs-sg
+              sed -i "s/efs-sc/efs-sc-{{inputs.parameters.cluster}}-efs-sc/g" /app/docs/resources/pvc.yaml
+              sed -i "s/bda-efs-claim-test/bda-$lowercase_world-pvc/g" /app/docs/resources/pvc.yaml
+              kubectl apply -f /app/docs/resources/pvc.yaml
+            end_time=$(date -u +%s)
+            duration=$((end_time - start_time))
+            formatted_duration=$(printf "%d:%02d:%02d" "$((duration / 3600))" "$(((duration % 3600) / 60))" "$((duration % 60))")
+            echo efs-create,, $(date +"%Y-%m-%d %H:%M:%S" -ud "@$start_time"), $(date +"%Y-%m-%d %H:%M:%S" -ud "@$end_time"), $formatted_duration >> /data/{{inputs.parameters.logLocation}}/{{inputs.parameters.worldName}}_{{workflow.name}}_times.csv
+        volumeMounts:
+        - name: workdir
+          mountPath: "/data"
+    tolerations:
+    - key: "s3gis.be/pool"
+      operator: "Equal"
+      value: "worker"
+      effect: "NoSchedule"
+    nodeSelector:
+      node-type: worker
+    metadata:
+      labels:
+        world: "{{inputs.parameters.worldName}}"
+        workflow: "{{workflow.name}}"
+
+  - name: update-config
+    inputs:
+        parameters:
+        - name: imageRepo
+        - name: region
+        - name: worldName
+        - name: worldId
+        - name: logLocation
+        - name: version
+        - name: retryCount
+    retryStrategy:
+        limit: "{{inputs.parameters.retryCount}}"
+        retryPolicy: "OnError"
+    script:
+        image: "{{inputs.parameters.imageRepo}}/bda-world-storage:{{inputs.parameters.version}}"
+        resources:
+          requests:
+            cpu: 2
+        command: [python3]
+        source: | 
+          import os
+          import yaml
+          import json
+          import time
+          import shutil
+          import boto3
+          import botocore
+          import subprocess
+          import logging
+          import sys
+          from datetime import datetime, timedelta, timezone
+
+          class hourstimedelta(timedelta):
+            def __str__(self):
+              seconds = self.total_seconds()
+              hours = seconds // 3600
+              minutes = (seconds % 3600) // 60
+              seconds = seconds % 60
+              str = '{}:{:02d}:{:02d}'.format(int(hours), int(minutes), int(seconds))
+              return (str)
+
+          return_code = 0
+          lower_case_world_name = "bda-{{inputs.parameters.worldName}}".lower()
+
+          start_time = datetime.utcnow().replace(tzinfo=timezone.utc)
+
+          log_location = os.path.join("/data", "{{inputs.parameters.logLocation}}")
+          if not os.path.exists(log_location):
+            os.makedirs(log_location)
+
+          time_log_path = os.path.join(log_location, "{{inputs.parameters.worldName}}_{{workflow.name}}_times.csv")
+          time_log_file = open(time_log_path, 'a+')
+
+          log_path = os.path.join(log_location, "{{inputs.parameters.worldName}}_{{workflow.name}}_update_config.log")
+          logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s [%(levelname)s] %(message)s",
+            handlers=[
+                logging.FileHandler(log_path),
+                logging.StreamHandler(sys.stdout)
+            ]
+          )
+          
+          logging.info(f"Updating config for references to S3 buckets for {{inputs.parameters.worldName}}")
+          
+          config_path = os.path.join("/data", "world", "{{inputs.parameters.worldName}}")
+          os.makedirs(config_path, exist_ok=True)
+          config_file = open(os.path.join(config_path, "world_info.json"), 'w')
+
+          boto3.setup_default_session(region_name='{{inputs.parameters.region}}') 
+
+          s3_client = boto3.client('s3')
+
+          response = s3_client.list_buckets()
+          world_buckets = [bucket['Name'] for bucket in response['Buckets'] if lower_case_world_name in bucket['Name']]
+          
+          buckets_with_stack_name = []
+          for bucket in world_buckets:
+            try:
+              tags = s3_client.get_bucket_tagging(Bucket=bucket)['TagSet']
+              for tag in tags:
+                if tag['Key'] == 'aws:cloudformation:stack-name' and tag['Value'] == 'bda-{{inputs.parameters.worldName}}':
+                  buckets_with_stack_name.append(bucket)
+                  break
+            except botocore.exceptions.ClientError:
+              # Bucket doesn't have tags or tagging is not supported
+              logging.error(f"S3 client error no tags or tagging not supported")
+              return_code = 1
+              pass
+
+          json_output = {}
+
+          json_output["name"] = "{{inputs.parameters.worldName}}"
+          json_output["id"] = "{{inputs.parameters.worldId}}"
+          json_output["wfid"] = "{{workflow.name}}"
+          json_output["status"] = "Ready"
+
+          if buckets_with_stack_name:
+            if len(buckets_with_stack_name) == 4:
+              logging.info(f"Buckets found for {lower_case_world_name}:")
+              for bucket in buckets_with_stack_name:
+                logging.info(f"    {bucket}")
+                tag = 'Error'
+                suffix = bucket.split(lower_case_world_name, 1)[1]
+                if 'ingest' in suffix:
+                  tag = 'ingest'
+                elif 'pipeline' in suffix:
+                  tag = "pipeline"
+                elif 'temp' in suffix:
+                  tag = "temp"
+                elif 'tile' in suffix:
+                  tag = "tile"
+                json_output[tag] = bucket
+            else:
+              logging.error(f"There are {len(buckets_with_stack_name)} buckets when there should be exactly 4.")
+              return_code = 1
+          else:
+            logging.error(f"No s3 buckets found for {lower_case_world_name}")
+            return_code = 1
+
+          logging.info(f"Updating config for refernces to EFS for {{inputs.parameters.worldName}}")
+          
+          cmd = f'kubectl get pvc -n argo -o custom-columns=NAME:.metadata.name '
+          pvc_return = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+          if pvc_return.returncode == 0:
+            pvc_names = pvc_return.stdout.split('\n')[1:]  # Exclude header, split into a list
+            pvc_name = lower_case_world_name + '-pvc'
+            world_pvcs = [name for name in pvc_names if pvc_name == name]
+            if len(world_pvcs) == 1:
+              logging.info(f"EFS found {world_pvcs[0]}")
+              json_output["efs"] = world_pvcs[0]
+            else:
+              logging.error(f"Found {len(world_pvcs)} pvcs for {{inputs.parameters.worldName}}, should only have one.")
+              return_code = 1
+          else:
+            logging.error(f"Could not find a pvc for {lower_case_world_name}")
+            return_code = 1
+
+          end_time = datetime.utcnow().replace(tzinfo=timezone.utc)
+          formatted_end_time = end_time.strftime("%Y-%m-%d %H:%M:%S")
+          json_output["creation"] = formatted_end_time
+          
+          json.dump(json_output, config_file, indent=2)
+          duration_seconds = (end_time - start_time).total_seconds()
+
+          duration_str = str(hourstimedelta(seconds=int(duration_seconds)))
+          formatted_start_time = start_time.strftime("%Y-%m-%d %H:%M:%S")
+          time_log_file.write(f"update-config,, {formatted_start_time}, {formatted_end_time}, {duration_str}\n")
+          sys.exit(return_code)
+        volumeMounts:
+        - name: workdir
+          mountPath: "/data"
+    tolerations:
+    - key: "s3gis.be/pool"
+      operator: "Equal"
+      value: "worker"
+      effect: "NoSchedule"
+    nodeSelector:
+      node-type: worker
+    metadata:
+      labels:
+        world: "{{inputs.parameters.worldName}}"
+        workflow: "{{workflow.name}}"
+
+  - name: world-config-map
+    inputs:
+        parameters:
+        - name: imageRepo
+        - name: worldName
+        - name: worldId
+        - name: logLocation
+        - name: version
+        - name: retryCount
+    retryStrategy:
+        limit: "{{inputs.parameters.retryCount}}"
+        retryPolicy: "OnError"
+    script:
+        image: "{{inputs.parameters.imageRepo}}/bda-world-storage:{{inputs.parameters.version}}"
+        resources:
+          requests:
+            cpu: 2
+        command: [python3]
+        source: | 
+          import os
+          import json
+          import yaml
+          import time
+          import subprocess
+          import logging
+          import sys
+          from datetime import datetime, timedelta, timezone
+
+          class hourstimedelta(timedelta):
+            def __str__(self):
+              seconds = self.total_seconds()
+              hours = seconds // 3600
+              minutes = (seconds % 3600) // 60
+              seconds = seconds % 60
+              str = '{}:{:02d}:{:02d}'.format(int(hours), int(minutes), int(seconds))
+              return (str)
+
+          return_code = 0
+          lower_case_world_name = "bda-{{inputs.parameters.worldName}}-config".lower()
+
+          start_time = datetime.utcnow().replace(tzinfo=timezone.utc)
+          
+          log_location = os.path.join("/data", "{{inputs.parameters.logLocation}}")
+          if not os.path.exists(log_location):
+            os.makedirs(log_location)
+
+          time_log_path = os.path.join(log_location, "{{inputs.parameters.worldName}}_{{workflow.name}}_times.csv")
+          time_log_file = open(time_log_path, 'a+')
+
+          log_path = os.path.join(log_location, "{{inputs.parameters.worldName}}_{{workflow.name}}_world_config_map.log")
+          logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s [%(levelname)s] %(message)s",
+            handlers=[
+                logging.FileHandler(log_path),
+                logging.StreamHandler(sys.stdout)
+            ]
+          )
+
+          config_path = os.path.join("/data", "world", "{{inputs.parameters.worldName}}")
+          try:
+            with open(os.path.join(config_path, "world_info.json"), 'r') as config_file:
+              storage_data = json.load(config_file)
+            
+            logging.info(f"Create configMap for {{inputs.parameters.worldName}}")
+            
+            config_map_data = {
+              "apiVersion": "v1",
+              "kind": "ConfigMap",
+              "metadata": 
+              {
+                "name": lower_case_world_name,
+                "namespace": "argo",
+                "labels":
+                {
+                  "workflows.argoproj.io/configmap-type": "Parameter"
+                }
+              },
+              "data": 
+              {
+                "world-name": "{{inputs.parameters.worldName}}",
+                "world-id": storage_data.get('id'),
+
+                "video-cpu-limit": "12",
+                "video-cpu-cores": "7",
+                "video-cpu-ram": "13Gi",
+
+                "video-gpu-limit": "4",
+                "video-gpu-cores": "7",
+                "video-gpu-ram": "27Gi",
+
+                "video-match-limit": "1",
+                "video-match-cores": "94",
+                "video-match-ram": "173Gi",
+
+                "worker-limit": "12",
+                "worker-cores": "3",
+                "worker-ram": "14Gi",
+
+                "zone-cpu-limit": "6",
+                "zone-cpu-cores": "15",
+                "zone-cpu-ram": "27Gi",
+
+                "zone-gpu-limit": "2",
+                "zone-gpu-cores": "15",
+                "zone-gpu-ram": "55Gi",
+
+                "sync-pull-limit": "1",
+                "sync-push-limit":"1",
+                
+                "ingest": storage_data.get('ingest'),
+                "pipeline": storage_data.get('pipeline'),
+                "temp": storage_data.get('temp'),
+                "tile": storage_data.get('tile'),
+                "pvc": storage_data.get('efs')
+              },
+            }
+          
+            config_yaml_path = "configMap.yaml"
+
+            # Write ConfigMap to configMap.yaml
+            with open(config_yaml_path, "w") as yaml_file:
+              yaml.dump(config_map_data, yaml_file, default_flow_style=False)
+
+            logging.info(yaml.dump(config_map_data, default_flow_style=False))
+            logging.info(f"{config_yaml_path} has been generated.")
+            
+            cmd = f'kubectl apply -f {config_yaml_path}'
+            logging.info(cmd)
+            
+            try:
+              subprocess.run(cmd, shell=True, check=True)
+              logging.info("ConfigMap applied successfully to Kubernetes.")
+            except subprocess.CalledProcessError as e:
+              logging.exception(f"Error applying ConfigMap to Kubernetes: {e}")
+              return_code = 1
+
+          except FileNotFoundError:
+            logging.exception(f"world_info.json not found in {config_path}")
+            return_code = 1
+
+          end_time = datetime.utcnow().replace(tzinfo=timezone.utc)
+          duration_seconds = (end_time - start_time).total_seconds()
+          
+          duration_str = str(hourstimedelta(seconds=int(duration_seconds)))
+          formatted_start_time = start_time.strftime("%Y-%m-%d %H:%M:%S")
+          formatted_end_time = end_time.strftime("%Y-%m-%d %H:%M:%S")
+          time_log_file.write(f"world-config-map,, {formatted_start_time}, {formatted_end_time}, {duration_str}\n")
+          sys.exit(return_code)
+        volumeMounts:
+        - name: workdir
+          mountPath: "/data"
+    tolerations:
+    - key: "s3gis.be/pool"
+      operator: "Equal"
+      value: "worker"
+      effect: "NoSchedule"
+    nodeSelector:
+      node-type: worker
+    metadata:
+      labels:
+        world: "{{inputs.parameters.worldName}}"
+        workflow: "{{workflow.name}}"
+
+  - name: sync-config
+    inputs:
+        parameters:
+        - name: imageRepo
+        - name: region
+        - name: worldName
+        - name: worldId
+        - name: logLocation
+        - name: version
+        - name: retryCount
+        - name: worldInfoLocation
+    retryStrategy:
+        limit: "{{inputs.parameters.retryCount}}"
+        retryPolicy: "OnError"
+    script:
+        image: "{{inputs.parameters.imageRepo}}/worker:{{inputs.parameters.version}}"
+        resources:
+          requests:
+            cpu: 2
+        command: [bash]
+        source: | 
+            set -eo pipefail
+            mkdir -p /data/{{inputs.parameters.logLocation}}
+            exec > >(tee -a /data/{{inputs.parameters.logLocation}}/{{inputs.parameters.worldName}}_{{workflow.name}}_sync_config.log) 2>&1
+            
+            start_time=$(date -u +%s)
+              if [ -d /data/world/{{inputs.parameters.worldName}} ]; then
+                aws --region {{inputs.parameters.region}} s3 sync /data/world/{{inputs.parameters.worldName}}/ s3://{{inputs.parameters.worldInfoLocation}}/{{inputs.parameters.worldName}}/
+              fi
+
+              echo "Putting data to DB"
+              cat /data/world/{{inputs.parameters.worldName}}/world_info.json
+              response=$(curl -X 'PUT' 'http://bda-tiledb-ws.bda:8080/world/{{inputs.parameters.worldId}}' -w "%{http_code}" -s -o /data/world/{{inputs.parameters.worldName}}/world_status.json -H 'Content-Type: application/json' -d @/data/world/{{inputs.parameters.worldName}}/world_info.json)
+              if [ "$response" -ne 200 ]; then
+                echo "World {{inputs.parameters.worldName}} with id {{inputs.parameters.worldId}} had http response code "$response""
+                exit "$response"
+              fi
+
+              echo "Sending Ready world event"
+              cat /data/world/{{inputs.parameters.worldName}}/world_status.json
+              mosquitto_pub -h 'mosquitto-mqtts.bda' -t worlds -f /data/world/{{inputs.parameters.worldName}}/world_status.json
+              mosquitto_pub -h 'mosquitto-mqtts.bda' -t world/"{{inputs.parameters.worldId}}" -f /data/world/{{inputs.parameters.worldName}}/world_status.json
+            end_time=$(date -u +%s)
+            duration=$((end_time - start_time))
+            formatted_duration=$(printf "%d:%02d:%02d" "$((duration / 3600))" "$(((duration % 3600) / 60))" "$((duration % 60))")
+            echo sync-config,, $(date +"%Y-%m-%d %H:%M:%S" -ud "@$start_time"), $(date +"%Y-%m-%d %H:%M:%S" -ud "@$end_time"), $formatted_duration >> /data/{{inputs.parameters.logLocation}}/{{inputs.parameters.worldName}}_{{workflow.name}}_times.csv
+        volumeMounts:
+        - name: workdir
+          mountPath: "/data"
+    tolerations:
+    - key: "s3gis.be/pool"
+      operator: "Equal"
+      value: "worker"
+      effect: "NoSchedule"
+    nodeSelector:
+      node-type: worker
+    metadata:
+      labels:
+        world: "{{inputs.parameters.worldName}}"
+        workflow: "{{workflow.name}}"
+
+  - name: world-destroy
+    dag:
+        tasks:
+        - name: db-destroying
+          template: db-update
+          arguments:
+            parameters:
+              [{name: imageRepo,            value: "{{workflow.parameters.imageRepo}}"},
+               {name: worldName,            value: "{{workflow.parameters.worldName}}"},
+               {name: worldId,              value: "{{workflow.parameters.worldId}}"},
+               {name: logLocation,          value: "{{workflow.parameters.logLocation}}"},
+               {name: version,              value: "{{workflow.parameters.version}}"},
+               {name: retryCount,           value: "{{workflow.parameters.retryCount}}"},
+               {name: status,               value: "Destroying"},
+               {name: stepCount,            value: "7"}]
+        - name: cdk-destroy
+          template: cdk-destroy
+          depends: db-destroying
+          arguments:
+            parameters:
+              [{name: imageRepo,            value: "{{workflow.parameters.imageRepo}}"},
+               {name: worldName,            value: "{{workflow.parameters.worldName}}"},
+               {name: region,               value: "{{workflow.parameters.region}}"},
+               {name: worldId,              value: "{{workflow.parameters.worldId}}"},
+               {name: logLocation,          value: "{{workflow.parameters.logLocation}}"},
+               {name: version,              value: "{{workflow.parameters.version}}"},
+               {name: retryCount,           value: "{{workflow.parameters.retryCount}}"}]
+        - name: infra-destroy
+          template: infra-destroy
+          depends: db-destroying
+          arguments:
+            parameters:
+              [{name: imageRepo,            value: "{{workflow.parameters.imageRepo}}"},
+               {name: worldName,            value: "{{workflow.parameters.worldName}}"},
+               {name: worldId,              value: "{{workflow.parameters.worldId}}"},
+               {name: logLocation,          value: "{{workflow.parameters.logLocation}}"},
+               {name: version,              value: "{{workflow.parameters.version}}"},
+               {name: retryCount,           value: "{{workflow.parameters.retryCount}}"}]
+        - name: efs-destroy
+          template: efs-destroy
+          depends: infra-destroy
+          arguments:
+            parameters:
+              [{name: imageRepo,            value: "{{workflow.parameters.imageRepo}}"},
+               {name: worldName,            value: "{{workflow.parameters.worldName}}"},
+               {name: worldId,              value: "{{workflow.parameters.worldId}}"},
+               {name: logLocation,          value: "{{workflow.parameters.logLocation}}"},
+               {name: version,              value: "{{workflow.parameters.version}}"},
+               {name: retryCount,           value: "{{workflow.parameters.retryCount}}"}]
+        - name: s3-destroy
+          template: s3-destroy
+          depends: cdk-destroy
+          arguments:
+            parameters:
+              [{name: imageRepo,            value: "{{workflow.parameters.imageRepo}}"},
+               {name: region,               value: "{{workflow.parameters.region}}"},
+               {name: worldName,            value: "{{workflow.parameters.worldName}}"},
+               {name: worldId,              value: "{{workflow.parameters.worldId}}"},
+               {name: logLocation,          value: "{{workflow.parameters.logLocation}}"},
+               {name: version,              value: "{{workflow.parameters.version}}"},
+               {name: retryCount,           value: "{{workflow.parameters.retryCount}}"}]
+        - name: configmap-destroy
+          template: configmap-destroy
+          depends: s3-destroy && efs-destroy
+          arguments:
+            parameters:
+              [{name: imageRepo,            value: "{{workflow.parameters.imageRepo}}"},
+               {name: worldName,            value: "{{workflow.parameters.worldName}}"},
+               {name: worldId,              value: "{{workflow.parameters.worldId}}"},
+               {name: logLocation,          value: "{{workflow.parameters.logLocation}}"},
+               {name: version,              value: "{{workflow.parameters.version}}"},
+               {name: retryCount,           value: "{{workflow.parameters.retryCount}}"}]
+        - name: delete-s3-config
+          template: delete-s3-config
+          depends: s3-destroy && efs-destroy && configmap-destroy
+          arguments:
+            parameters:
+              [{name: imageRepo,            value: "{{workflow.parameters.imageRepo}}"},
+               {name: region,               value: "{{workflow.parameters.region}}"},
+               {name: worldName,            value: "{{workflow.parameters.worldName}}"},
+               {name: worldId,              value: "{{workflow.parameters.worldId}}"},
+               {name: logLocation,          value: "{{workflow.parameters.logLocation}}"},
+               {name: version,              value: "{{workflow.parameters.version}}"},
+               {name: retryCount,           value: "{{workflow.parameters.retryCount}}"},
+               {name: worldInfoLocation,    value: "{{workflow.parameters.worldInfoLocation}}"}]
+
+  - name: cdk-destroy
+    inputs:
+        parameters:
+        - name: region
+        - name: imageRepo
+        - name: worldName
+        - name: worldId
+        - name: logLocation
+        - name: version
+        - name: retryCount
+    retryStrategy:
+        limit: "{{inputs.parameters.retryCount}}"
+        retryPolicy: "OnError"
+    script:
+        image: "{{inputs.parameters.imageRepo}}/bda-world-storage:{{inputs.parameters.version}}"
+        resources:
+          requests:
+            cpu: 2
+        command: [bash]
+        source: | 
+            set -eo pipefail
+            mkdir -p /data/{{inputs.parameters.logLocation}}
+            exec > >(tee -a /data/{{inputs.parameters.logLocation}}/{{inputs.parameters.worldName}}_{{workflow.name}}_cdk_destroy.log) 2>&1
+            
+            start_time=$(date -u +%s)
+              echo "AWS Credits for S3 Creation:"
+              aws --region {{inputs.parameters.region}} sts get-caller-identity
+              WORLD_NAME={{inputs.parameters.worldName}} AWS_DEFAULT_REGION={{inputs.parameters.region}} cdk destroy bda-world --force
+            end_time=$(date -u +%s)
+            duration=$((end_time - start_time))
+            formatted_duration=$(printf "%d:%02d:%02d" "$((duration / 3600))" "$(((duration % 3600) / 60))" "$((duration % 60))")
+            echo cdk-destroy,, $(date +"%Y-%m-%d %H:%M:%S" -ud "@$start_time"), $(date +"%Y-%m-%d %H:%M:%S" -ud "@$end_time"), $formatted_duration >> /data/{{inputs.parameters.logLocation}}/{{inputs.parameters.worldName}}_{{workflow.name}}_times.csv
+        volumeMounts:
+        - name: workdir
+          mountPath: "/data"
+    tolerations:
+    - key: "s3gis.be/pool"
+      operator: "Equal"
+      value: "worker"
+      effect: "NoSchedule"
+    nodeSelector:
+      node-type: worker
+    metadata:
+      labels:
+        world: "{{inputs.parameters.worldName}}"
+        workflow: "{{workflow.name}}"
+  
+  - name: s3-destroy
+    inputs:
+        parameters:
+        - name: imageRepo
+        - name: region
+        - name: worldName
+        - name: worldId
+        - name: logLocation
+        - name: version
+        - name: retryCount
+    retryStrategy:
+        limit: "{{inputs.parameters.retryCount}}"
+        retryPolicy: "OnError"
+    script:
+        image: "{{inputs.parameters.imageRepo}}/bda-world-storage:{{inputs.parameters.version}}"
+        resources:
+          requests:
+            cpu: 2
+        command: [python3]
+        source: | 
+          import os
+          import yaml
+          import json
+          import time
+          import shutil
+          import logging
+          import sys
+          import boto3
+          import botocore
+          import subprocess
+          from datetime import datetime, timedelta, timezone
+
+          class hourstimedelta(timedelta):
+            def __str__(self):
+              seconds = self.total_seconds()
+              hours = seconds // 3600
+              minutes = (seconds % 3600) // 60
+              seconds = seconds % 60
+              str = '{}:{:02d}:{:02d}'.format(int(hours), int(minutes), int(seconds))
+              return (str)
+
+          return_code = 0
+
+          start_time = datetime.utcnow().replace(tzinfo=timezone.utc)
+
+          lower_case_world_name = "{{inputs.parameters.worldName}}".lower()
+
+          log_location = os.path.join("/data", "{{inputs.parameters.logLocation}}")
+          if not os.path.exists(log_location):
+            os.makedirs(log_location)
+
+          time_log_path = os.path.join(log_location, "{{inputs.parameters.worldName}}_{{workflow.name}}_times.csv")
+          time_log_file = open(time_log_path, 'a+')
+
+          log_path = os.path.join(log_location, "{{inputs.parameters.worldName}}_{{workflow.name}}_s3_destroy.log")
+          logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s [%(levelname)s] %(message)s",
+            handlers=[
+                logging.FileHandler(log_path),
+                logging.StreamHandler(sys.stdout)
+            ]
+          )
+
+          logging.info(f"Starting Delete of {{inputs.parameters.worldName}}")
+
+          boto3.setup_default_session(region_name="{{inputs.parameters.region}}")
+
+          buckets_with_stack_name = []
+          s3_client = boto3.client('s3')
+          s3_resource = boto3.resource('s3')
+
+          response = s3_client.list_buckets()
+          world_buckets = [bucket['Name'] for bucket in response['Buckets']]
+          
+          for bucket in world_buckets:
+            split = bucket.split("-")[1:-2] #remove unique id
+            buckettype = bucket.split("-")[-2] #bucket name and id is stored in second to last element
+            world_section = "-".join(split)
+            if ( world_section == lower_case_world_name and 
+              ("temp" in buckettype or "tile" in buckettype or 
+              "pipeline" in buckettype or "ingest" in buckettype) ):
+              buckets_with_stack_name.append(bucket)
+
+          if buckets_with_stack_name:
+            logging.info(f"Found {len(buckets_with_stack_name)} buckets for world {{inputs.parameters.worldName}}")
+          else:
+            logging.warning("Unable to find any buckets to delete")
+          
+          for bucket in buckets_with_stack_name:
+            try:
+              s3_client.head_bucket(Bucket=bucket)
+            
+              bucket_resource = s3_resource.Bucket(bucket)
+              if bucket_resource:
+                logging.info(f"Bucket: {bucket}")
+                logging.info(f"    Expunging all data")
+                bucket_resource.object_versions.all().delete()
+                logging.info(f"    Deleting bucket")
+                bucket_resource.delete()
+            except botocore.exceptions.ClientError:
+              logging.error(f"Could not find {bucket} to delete")
+              return_code = 1
+
+          end_time = datetime.utcnow().replace(tzinfo=timezone.utc)
+          duration_seconds = (end_time - start_time).total_seconds()
+
+          duration_str = str(hourstimedelta(seconds=int(duration_seconds)))
+          formatted_start_time = start_time.strftime("%Y-%m-%d %H:%M:%S")
+          formatted_end_time = end_time.strftime("%Y-%m-%d %H:%M:%S")
+          time_log_file.write(f"s3-destroy,, {formatted_start_time}, {formatted_end_time}, {duration_str}\n")
+          sys.exit(return_code)
+        volumeMounts:
+        - name: workdir
+          mountPath: "/data"
+    tolerations:
+    - key: "s3gis.be/pool"
+      operator: "Equal"
+      value: "worker"
+      effect: "NoSchedule"
+    nodeSelector:
+      node-type: worker
+    metadata:
+      labels:
+        world: "{{inputs.parameters.worldName}}"
+        workflow: "{{workflow.name}}"
+  
+  - name: efs-destroy
+    inputs:
+        parameters:
+        - name: imageRepo
+        - name: worldName
+        - name: worldId
+        - name: logLocation
+        - name: version
+        - name: retryCount
+    retryStrategy:
+        limit: "{{inputs.parameters.retryCount}}"
+        retryPolicy: "OnError"
+    script:
+        image: "{{inputs.parameters.imageRepo}}/bda-world-storage:{{inputs.parameters.version}}"
+        resources:
+          requests:
+            cpu: 2
+        command: [bash]
+        source: | 
+            set -eo pipefail
+            mkdir -p /data/{{inputs.parameters.logLocation}}
+            exec > >(tee -a /data/{{inputs.parameters.logLocation}}/{{inputs.parameters.worldName}}_{{workflow.name}}_efs_destroy.log) 2>&1
+            
+            start_time=$(date -u +%s)
+              WORLD="{{inputs.parameters.worldName}}"
+              lowercase_world="${WORLD,,}"
+              if kubectl get pvc -n argo bda-$lowercase_world-pvc &> /dev/null; then
+                kubectl delete pvc -n argo bda-$lowercase_world-pvc
+              else
+                echo "PVC with name bda-$lowercase_world-pvc does not exist not deleting."
+              fi
+            end_time=$(date -u +%s)
+            duration=$((end_time - start_time))
+            formatted_duration=$(printf "%d:%02d:%02d" "$((duration / 3600))" "$(((duration % 3600) / 60))" "$((duration % 60))")
+            echo efs-destroy,, $(date +"%Y-%m-%d %H:%M:%S" -ud "@$start_time"), $(date +"%Y-%m-%d %H:%M:%S" -ud "@$end_time"), $formatted_duration >> /data/{{inputs.parameters.logLocation}}/{{inputs.parameters.worldName}}_{{workflow.name}}_times.csv
+        volumeMounts:
+        - name: workdir
+          mountPath: "/data"
+    tolerations:
+    - key: "s3gis.be/pool"
+      operator: "Equal"
+      value: "worker"
+      effect: "NoSchedule"
+    nodeSelector:
+      node-type: worker
+    metadata:
+      labels:
+        world: "{{inputs.parameters.worldName}}"
+        workflow: "{{workflow.name}}"
+  
+  - name: infra-destroy
+    inputs:
+        parameters:
+        - name: imageRepo
+        - name: worldName
+        - name: worldId
+        - name: logLocation
+        - name: version
+        - name: retryCount
+    retryStrategy:
+        limit: "{{inputs.parameters.retryCount}}"
+        retryPolicy: "OnError"
+    script:
+        image: "{{inputs.parameters.imageRepo}}/bda-world-storage:{{inputs.parameters.version}}"
+        resources:
+          requests:
+            cpu: 2
+        command: [bash]
+        source: | 
+            set -eo pipefail
+            mkdir -p /data/{{inputs.parameters.logLocation}}
+            exec > >(tee -a /data/{{inputs.parameters.logLocation}}/{{inputs.parameters.worldName}}_{{workflow.name}}_infra_destroy.log) 2>&1
+            
+            start_time=$(date -u +%s)
+              echo "Deleting Pods for {{inputs.parameters.worldName}}"
+              pod_list=$(kubectl get pods -n argo -l world={{inputs.parameters.worldName}} -o jsonpath='{.items[*].metadata.name}')
+              # Iterate through each pod and delete it
+              if [ -n "$pod_list" ]; then
+                for pod in $pod_list; do
+                  if [[ $pod == *"{{workflow.name}}"* ]]; then
+                    echo "Skipping $pod as it is used in our current workflow."
+                  else
+                    kubectl delete pod -n argo "$pod"
+                  fi
+                done
+              else
+                echo "No pods found with label {{inputs.parameters.worldName}}"
+              fi
+
+              echo "Deleting Workflows for {{inputs.parameters.worldName}}"
+              wf_list=$(kubectl get wf -n argo -l world={{inputs.parameters.worldName}} -o jsonpath='{.items[*].metadata.name}')
+              # Iterate through each wf and delete it
+              if [ -n "$wf_list" ]; then
+                for wf in $wf_list; do
+                  if [ "$wf" != "{{workflow.name}}" ]; then
+                    kubectl delete wf -n argo "$wf"
+                  else
+                    echo "Skipping $wf since that is our current workflow."
+                  fi
+                done
+              else
+                echo "No workflows found with label {{inputs.parameters.worldName}}"
+              fi
+            end_time=$(date -u +%s)
+            duration=$((end_time - start_time))
+            formatted_duration=$(printf "%d:%02d:%02d" "$((duration / 3600))" "$(((duration % 3600) / 60))" "$((duration % 60))")
+            echo infra-destroy,, $(date +"%Y-%m-%d %H:%M:%S" -ud "@$start_time"), $(date +"%Y-%m-%d %H:%M:%S" -ud "@$end_time"), $formatted_duration >> /data/{{inputs.parameters.logLocation}}/{{inputs.parameters.worldName}}_{{workflow.name}}_times.csv
+        volumeMounts:
+        - name: workdir
+          mountPath: "/data"
+    tolerations:
+    - key: "s3gis.be/pool"
+      operator: "Equal"
+      value: "worker"
+      effect: "NoSchedule"
+    nodeSelector:
+      node-type: worker
+    metadata:
+      labels:
+        world: "{{inputs.parameters.worldName}}"
+        workflow: "{{workflow.name}}"
+
+  - name: configmap-destroy
+    inputs:
+        parameters:
+        - name: imageRepo
+        - name: worldName
+        - name: worldId
+        - name: logLocation
+        - name: version
+        - name: retryCount
+    retryStrategy:
+        limit: "{{inputs.parameters.retryCount}}"
+        retryPolicy: "OnError"
+    script:
+        image: "{{inputs.parameters.imageRepo}}/bda-world-storage:{{inputs.parameters.version}}"
+        resources:
+          requests:
+            cpu: 2
+        command: [bash]
+        source: | 
+            set -eo pipefail
+            mkdir -p /data/{{inputs.parameters.logLocation}}
+            exec > >(tee -a /data/{{inputs.parameters.logLocation}}/{{inputs.parameters.worldName}}_{{workflow.name}}_configmap_destroy.log) 2>&1
+            
+            start_time=$(date -u +%s)
+              WORLD="{{inputs.parameters.worldName}}"
+              lowercase_world="${WORLD,,}"
+              echo "Deleting ConfigMap for {{inputs.parameters.worldName}}"
+              kubectl delete configmap -n argo bda-$lowercase_world-config --ignore-not-found
+            end_time=$(date -u +%s)
+            duration=$((end_time - start_time))
+            formatted_duration=$(printf "%d:%02d:%02d" "$((duration / 3600))" "$(((duration % 3600) / 60))" "$((duration % 60))")
+            echo configmap-destroy,, $(date +"%Y-%m-%d %H:%M:%S" -ud "@$start_time"), $(date +"%Y-%m-%d %H:%M:%S" -ud "@$end_time"), $formatted_duration >> /data/{{inputs.parameters.logLocation}}/{{inputs.parameters.worldName}}_{{workflow.name}}_times.csv
+        volumeMounts:
+        - name: workdir
+          mountPath: "/data"
+    tolerations:
+    - key: "s3gis.be/pool"
+      operator: "Equal"
+      value: "worker"
+      effect: "NoSchedule"
+    nodeSelector:
+      node-type: worker
+    metadata:
+      labels:
+        world: "{{inputs.parameters.worldName}}"
+        workflow: "{{workflow.name}}"
+
+  - name: delete-s3-config
+    inputs:
+        parameters:
+        - name: region
+        - name: imageRepo
+        - name: worldName
+        - name: worldId
+        - name: logLocation
+        - name: version
+        - name: retryCount
+        - name: worldInfoLocation
+    retryStrategy:
+        limit: "{{inputs.parameters.retryCount}}"
+        retryPolicy: "OnError"
+    script:
+        image: "{{inputs.parameters.imageRepo}}/worker:{{inputs.parameters.version}}"
+        resources:
+          requests:
+            cpu: 2
+        command: [bash]
+        source: | 
+            set -eo pipefail
+            mkdir -p /data/{{inputs.parameters.logLocation}}
+            exec > >(tee -a /data/{{inputs.parameters.logLocation}}/{{inputs.parameters.worldName}}_{{workflow.name}}_delete_s3_config.log) 2>&1
+            
+            start_time=$(date -u +%s)
+              aws --region {{inputs.parameters.region}} s3 rm --recursive s3://{{inputs.parameters.worldInfoLocation}}/{{inputs.parameters.worldName}}/
+
+              echo "Deleting world from DB"
+              response=$(curl -X 'DELETE' 'http://bda-tiledb-ws.bda:8080/world/{{inputs.parameters.worldId}}' -w "%{http_code}" -s -o /dev/null)
+              if (( response < 200 || response >= 300 )); then
+                echo "World {{inputs.parameters.worldName}} with id {{inputs.parameters.worldId}} had http response code "$response" while deleting from DB"
+                exit "$response"
+              fi
+
+              echo "Sending Destroyed world event"
+              echo '{"id": {{inputs.parameters.worldId}}, "name": "{{inputs.parameters.worldName}}", "status": "Destroyed"}' | jq '.' > /data/world/{{inputs.parameters.worldName}}/world_status.json
+              cat /data/world/{{inputs.parameters.worldName}}/world_status.json
+              mosquitto_pub -h 'mosquitto-mqtts.bda' -t worlds -f /data/world/{{inputs.parameters.worldName}}/world_status.json
+              mosquitto_pub -h 'mosquitto-mqtts.bda' -t world/"{{inputs.parameters.worldId}}" -f /data/world/{{inputs.parameters.worldName}}/world_status.json
+            end_time=$(date -u +%s)
+            duration=$((end_time - start_time))
+            formatted_duration=$(printf "%d:%02d:%02d" "$((duration / 3600))" "$(((duration % 3600) / 60))" "$((duration % 60))")
+            echo delete-s3-config,, $(date +"%Y-%m-%d %H:%M:%S" -ud "@$start_time"), $(date +"%Y-%m-%d %H:%M:%S" -ud "@$end_time"), $formatted_duration >> /data/{{inputs.parameters.logLocation}}/{{inputs.parameters.worldName}}_{{workflow.name}}_times.csv
+        volumeMounts:
+        - name: workdir
+          mountPath: "/data"
+    tolerations:
+    - key: "s3gis.be/pool"
+      operator: "Equal"
+      value: "worker"
+      effect: "NoSchedule"
+    nodeSelector:
+      node-type: worker
+    metadata:
+      labels:
+        world: "{{inputs.parameters.worldName}}"
+        workflow: "{{workflow.name}}"
+
+  - name: exit-handler
+    steps:
+    - - name: db-exit-failure
+        template: db-update
+        when: "{{workflow.status}} != Succeeded"
+        arguments:
+          parameters:
+            [{name: imageRepo,            value: "{{workflow.parameters.imageRepo}}"},
+              {name: region,               value: "{{workflow.parameters.region}}"},
+              {name: worldName,            value: "{{workflow.parameters.worldName}}"},
+              {name: worldId,              value: "{{workflow.parameters.worldId}}"},
+              {name: logLocation,          value: "{{workflow.parameters.logLocation}}"},
+              {name: version,              value: "{{workflow.parameters.version}}"},
+              {name: retryCount,           value: "{{workflow.parameters.retryCount}}"},
+              {name: status,               value: "Failed"},
+              {name: stepCount,            value: "6"}]
+    - - name: exit-sync-logs
+        template: exit-sync-logs
+        arguments:
+          parameters:
+            [{name: imageRepo,            value: "{{workflow.parameters.imageRepo}}"},
+              {name: worldName,            value: "{{workflow.parameters.worldName}}"},
+              {name: logLocation,          value: "{{workflow.parameters.logLocation}}"},
+              {name: version,              value: "{{workflow.parameters.version}}"}]
+  
+  - name: exit-sync-logs
+    inputs:
+        parameters:
+        - name: worldName
+          value: "{{workflow.parameters.worldName}}"
+        - name: imageRepo
+          value: "{{workflow.parameters.imageRepo}}"
+        - name: version
+          value: "{{workflow.parameters.version}}"
+        - name: logLocation
+          value: "{{workflow.parameters.logLocation}}"
+        - name: worldInfoLocation
+          value: "{{workflow.parameters.worldInfoLocation}}"
+    script:
+        #image: "{{inputs.parameters.imageRepo}}/worker:{{inputs.parameters.version}}"
+        #image: bitnami/kubectl:latest
+        image: bitnami/aws-cli:latest
+        resources:
+          requests:
+            cpu: 2
+        command: [bash]
+        source: | 
+            set -eo pipefail
+            mkdir -p /data/{{inputs.parameters.logLocation}}
+            start_time=$(date -ud "{{workflow.creationTimestamp}}" +%s)
+            duration_sec=$(echo "{{workflow.duration}}" | awk -F'.' '{print $1}')
+            formatted_duration=$(printf "%d:%02d:%02d" "$((duration_sec / 3600))" "$(((duration_sec % 3600) / 60))" "$((duration_sec % 60))")
+            echo {{workflow.name}},, $(date +"%Y-%m-%d %H:%M:%S" -ud "@$start_time"), $(date +"%Y-%m-%d %H:%M:%S" -ud "@$((start_time + duration_sec))"), $formatted_duration >> /data/{{inputs.parameters.logLocation}}/{{inputs.parameters.worldName}}_{{workflow.name}}_times.csv
+            aws --region {{workflow.parameters.region}} s3 sync --quiet /data/{{inputs.parameters.logLocation}}/ s3://{{inputs.parameters.worldInfoLocation}}/{{inputs.parameters.logLocation}}/
+        volumeMounts:
+        - name: workdir
+          mountPath: "/data"
+    tolerations:
+    - key: "s3gis.be/pool"
+      operator: "Equal"
+      value: "worker"
+      effect: "NoSchedule"
+    nodeSelector:
+      node-type: worker
+    metadata:
+      labels:
+        world: "{{inputs.parameters.worldName}}"
+        workflow: "{{workflow.name}}"

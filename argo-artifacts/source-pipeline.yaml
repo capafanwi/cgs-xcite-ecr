@@ -1,24 +1,2902 @@
 apiVersion: argoproj.io/v1alpha1
+#kind: WorkflowTemplate
 kind: Workflow
 metadata:
-  generateName: world-pipeline-run-
-  namespace: argo
+  #name: source-pipeline
+  generateName: source-pipeline-
+  labels:
+    world: default
+  annotations:
+    workflows.argoproj.io/description: |
+      templates for video processing to images
+    workflows.argoproj.io/maintainer: '@kip.carr@unity3d.com'
+    workflows.argoproj.io/tags: source
 spec:
-  workflowTemplateRef:
-    name: world-pipeline
+  entrypoint: video-pipeline
+  onExit: exit-handler
+  workflowMetadata:
+    labels:
+      world: "{{workflow.parameters.worldName}}"
+
   arguments:
     parameters:
-      - name: cluster
-        value: "my-cluster"
-      - name: imageRepo
-        value: "my-repo"
+      - name: worldConfig
       - name: worldName
-        value: "my-world"
-      - name: worldId
-        value: "world-123"
+      - name: imageRepo
+      - name: region
+        value: "us-east-1"
+      - name: pipelineLocation
+        value: "/data"
+      - name: workingLocation
+        value: "/working"
       - name: logLocation
-        value: "my-logs"
+        value: "logs"
       - name: version
         value: "2.1.36"
-      - name: worldInfoLocation
-        value: "info-location"
+      - name: fileName
+      - name: fileId
+      - name: configFile
+      - name: retryCount
+        value: 2
+
+  volumeClaimTemplates:
+  - metadata:
+      name: workdir
+    spec:
+      accessModes: [ "ReadWriteMany" ]
+      storageClassName: efs-sc
+      resources:
+        requests:
+          storage: 50Gi
+
+  templates:
+  - name: archive-pipeline
+    inputs:
+      parameters:
+      - name: worldName
+        value: "{{workflow.parameters.worldName}}"
+      - name: imageRepo
+        value: "{{workflow.parameters.imageRepo}}"
+      - name: region
+        value: "{{workflow.parameters.region}}"
+      - name: pipelineLocation
+        value: "{{workflow.parameters.pipelineLocation}}"
+      - name: workingLocation
+        value: "{{workflow.parameters.workingLocation}}"
+      - name: version
+        value: "{{workflow.parameters.version}}"
+      - name: archiveName
+        value: "{{workflow.parameters.fileName}}"
+      - name: configFile
+        value: "{{workflow.parameters.configFile}}"
+      - name: retryCount
+        value: "{{workflow.parameters.retryCount}}"
+      - name: worldPipelineBucket
+        valueFrom:
+          configMapKeyRef:
+            name: "{{workflow.parameters.worldConfig}}"
+            key: pipeline
+      - name: worldIngestBucket
+        valueFrom:
+          configMapKeyRef:
+            name: "{{workflow.parameters.worldConfig}}"
+            key: ingest
+      - name: worldPvc
+        valueFrom:
+          configMapKeyRef:
+            name: "{{workflow.parameters.worldConfig}}"
+            key: pvc
+    dag:
+        tasks:
+        - name: archive-extraction
+          template: archive-extraction
+          arguments:
+            parameters:
+              [{name: worldIngestBucket,    value: "{{inputs.parameters.worldIngestBucket}}"},
+               {name: worldPipelineBucket,  value: "{{inputs.parameters.worldPipelineBucket}}"},
+               {name: worldPvc,             value: "{{inputs.parameters.worldPvc}}"},
+               {name: worldName,            value: "{{inputs.parameters.worldName}}"},
+               {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+               {name: region,               value: "{{inputs.parameters.region}}"},
+               {name: pipelineLocation,     value: "{{inputs.parameters.pipelineLocation}}"},
+               {name: workingLocation,      value: "{{inputs.parameters.workingLocation}}"},
+               {name: version,              value: "{{inputs.parameters.version}}"},
+               {name: retryCount,           value: "{{inputs.parameters.retryCount}}"},
+               {name: archiveName,          value: "{{inputs.parameters.archiveName}}"},
+               {name: configFile,           value: "{{workflow.parameters.configFile}}"}]
+        - name: video-pipeline
+          template: video-pipeline
+          depends: archive-extraction
+
+  - name: video-pipeline
+    inputs:
+      parameters:
+      - name: worldName
+        value: "{{workflow.parameters.worldName}}"
+      - name: imageRepo
+        value: "{{workflow.parameters.imageRepo}}"
+      - name: region
+        value: "{{workflow.parameters.region}}"
+      - name: pipelineLocation
+        value: "{{workflow.parameters.pipelineLocation}}"
+      - name: workingLocation
+        value: "{{workflow.parameters.workingLocation}}"
+      - name: version
+        value: "{{workflow.parameters.version}}"
+      - name: videoName
+        value: "{{workflow.parameters.fileName}}"
+      - name: videoId
+        value: "{{workflow.parameters.fileId}}"
+      - name: configFile
+        value: "{{workflow.parameters.configFile}}"
+      - name: retryCount
+        value: "{{workflow.parameters.retryCount}}"
+      - name: worldPipelineBucket
+        valueFrom:
+          configMapKeyRef:
+            name: "{{workflow.parameters.worldConfig}}"
+            key: pipeline
+      - name: worldIngestBucket
+        valueFrom:
+          configMapKeyRef:
+            name: "{{workflow.parameters.worldConfig}}"
+            key: ingest
+      - name: worldPvc
+        valueFrom:
+          configMapKeyRef:
+            name: "{{workflow.parameters.worldConfig}}"
+            key: pvc
+    dag:
+        tasks:
+        - name: s3-pull-video
+          template: s3-pull-video
+          arguments:
+            parameters:
+              [{name: worldPipelineBucket,  value: "{{inputs.parameters.worldPipelineBucket}}"},
+               {name: worldIngestBucket,    value: "{{inputs.parameters.worldIngestBucket}}"},
+               {name: worldPvc,             value: "{{inputs.parameters.worldPvc}}"},
+               {name: worldName,            value: "{{inputs.parameters.worldName}}"},
+               {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+               {name: region,               value: "{{inputs.parameters.region}}"},
+               {name: pipelineLocation,     value: "{{inputs.parameters.pipelineLocation}}"},
+               {name: workingLocation,      value: "{{inputs.parameters.workingLocation}}"},
+               {name: version,              value: "{{inputs.parameters.version}}"},
+               {name: retryCount,           value: "{{inputs.parameters.retryCount}}"},
+               {name: videoName,            value: "{{inputs.parameters.videoName}}"},
+               {name: configFile,           value: "{{inputs.parameters.configFile}}"}]
+        - name: update-media-db
+          template: update-media-db
+          depends: s3-pull-video
+          arguments:
+            parameters:
+              [{name: worldPipelineBucket,  value: "{{inputs.parameters.worldPipelineBucket}}"},
+               {name: worldIngestBucket,    value: "{{inputs.parameters.worldIngestBucket}}"},
+               {name: worldPvc,             value: "{{inputs.parameters.worldPvc}}"},
+               {name: worldName,            value: "{{inputs.parameters.worldName}}"},
+               {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+               {name: region,               value: "{{inputs.parameters.region}}"},
+               {name: pipelineLocation,     value: "{{inputs.parameters.pipelineLocation}}"},
+               {name: workingLocation,      value: "{{inputs.parameters.workingLocation}}"},
+               {name: version,              value: "{{inputs.parameters.version}}"},
+               {name: retryCount,           value: "{{inputs.parameters.retryCount}}"},
+               {name: videoName,            value: "{{inputs.parameters.videoName}}"},
+               {name: videoId,              value: "{{inputs.parameters.videoId}}"},
+               {name: configFile,           value: "{{inputs.parameters.configFile}}"}]
+        - name: gpx-creation
+          template: gpx-creation
+          depends: s3-pull-video && update-media-db
+          arguments:
+            parameters:
+              [{name: worldPipelineBucket,  value: "{{inputs.parameters.worldPipelineBucket}}"},
+               {name: worldPvc,             value: "{{inputs.parameters.worldPvc}}"},
+               {name: worldName,            value: "{{inputs.parameters.worldName}}"},
+               {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+               {name: region,               value: "{{inputs.parameters.region}}"},
+               {name: pipelineLocation,     value: "{{inputs.parameters.pipelineLocation}}"},
+               {name: workingLocation,      value: "{{inputs.parameters.workingLocation}}"},
+               {name: version,              value: "{{inputs.parameters.version}}"},
+               {name: retryCount,           value: "{{inputs.parameters.retryCount}}"},
+               {name: videoName,            value: "{{inputs.parameters.videoName}}"},
+               {name: videoId,              value: "{{inputs.parameters.videoId}}"},
+               {name: configFile,           value: "{{workflow.parameters.configFile}}"}]
+        - name: video-sampling
+          template: video-sampling
+          depends: gpx-creation
+          arguments:
+            parameters:
+              [{name: worldPipelineBucket,  value: "{{inputs.parameters.worldPipelineBucket}}"},
+               {name: worldIngestBucket,    value: "{{inputs.parameters.worldIngestBucket}}"},
+               {name: worldPvc,             value: "{{inputs.parameters.worldPvc}}"},
+               {name: worldName,            value: "{{inputs.parameters.worldName}}"},
+               {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+               {name: region,               value: "{{inputs.parameters.region}}"},
+               {name: pipelineLocation,     value: "{{inputs.parameters.pipelineLocation}}"},
+               {name: workingLocation,      value: "{{inputs.parameters.workingLocation}}"},
+               {name: version,              value: "{{inputs.parameters.version}}"},
+               {name: retryCount,           value: "{{inputs.parameters.retryCount}}"},
+               {name: videoName,            value: "{{inputs.parameters.videoName}}"},
+               {name: videoId,              value: "{{inputs.parameters.videoId}}"},
+               {name: configFile,           value: "{{inputs.parameters.configFile}}"}]
+        - name: image-extraction
+          template: image-extraction
+          depends: video-sampling
+          arguments:
+            parameters:
+              [{name: worldPipelineBucket,  value: "{{inputs.parameters.worldPipelineBucket}}"},
+               {name: worldPvc,             value: "{{inputs.parameters.worldPvc}}"},
+               {name: worldName,            value: "{{inputs.parameters.worldName}}"},
+               {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+               {name: pipelineLocation,     value: "{{inputs.parameters.pipelineLocation}}"},
+               {name: workingLocation,      value: "{{inputs.parameters.workingLocation}}"},
+               {name: region,               value: "{{inputs.parameters.region}}"},
+               {name: version,              value: "{{inputs.parameters.version}}"},
+               {name: retryCount,           value: "{{inputs.parameters.retryCount}}"},
+               {name: videoName,            value: "{{inputs.parameters.videoName}}"},
+               {name: videoId,              value: "{{inputs.parameters.videoId}}"},
+               {name: configFile,           value: "{{inputs.parameters.configFile}}"}]
+        - name: images-process
+          template: images-process
+          depends: image-extraction
+          arguments:
+            parameters:
+              [{name: imagesLocation,  value: "{{inputs.parameters.videoName}}"}]
+
+  - name: images-pipeline
+    inputs:
+      parameters:
+      - name: worldName
+        value: "{{workflow.parameters.worldName}}"
+      - name: imageRepo
+        value: "{{workflow.parameters.imageRepo}}"
+      - name: region
+        value: "{{workflow.parameters.region}}"
+      - name: pipelineLocation
+        value: "{{workflow.parameters.pipelineLocation}}"
+      - name: workingLocation
+        value: "{{workflow.parameters.workingLocation}}"
+      - name: version
+        value: "{{workflow.parameters.version}}"
+      - name: imagesLocation
+        value: "{{workflow.parameters.fileName}}"
+      - name: configFile
+        value: "{{workflow.parameters.configFile}}"
+      - name: retryCount
+        value: "{{workflow.parameters.retryCount}}"
+      - name: worldPipelineBucket
+        valueFrom:
+          configMapKeyRef:
+            name: "{{workflow.parameters.worldConfig}}"
+            key: pipeline
+      - name: worldIngestBucket
+        valueFrom:
+          configMapKeyRef:
+            name: "{{workflow.parameters.worldConfig}}"
+            key: ingest
+      - name: worldPvc
+        valueFrom:
+          configMapKeyRef:
+            name: "{{workflow.parameters.worldConfig}}"
+            key: pvc
+    dag:
+        tasks:
+        - name: s3-pull-images
+          template: s3-pull-images
+          arguments:
+            parameters:
+              [{name: worldPipelineBucket,  value: "{{inputs.parameters.worldPipelineBucket}}"},
+               {name: worldIngestBucket,    value: "{{inputs.parameters.worldIngestBucket}}"},
+               {name: worldPvc,             value: "{{inputs.parameters.worldPvc}}"},
+               {name: worldName,            value: "{{inputs.parameters.worldName}}"},
+               {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+               {name: region,               value: "{{inputs.parameters.region}}"},
+               {name: pipelineLocation,     value: "{{inputs.parameters.pipelineLocation}}"},
+               {name: workingLocation,      value: "{{inputs.parameters.workingLocation}}"},
+               {name: version,              value: "{{inputs.parameters.version}}"},
+               {name: retryCount,           value: "{{inputs.parameters.retryCount}}"},
+               {name: imagesLocation,       value: "{{inputs.parameters.imagesLocation}}"},
+               {name: configFile,           value: "{{inputs.parameters.configFile}}"}]
+        - name: images-process
+          template: images-process
+          depends: s3-pull-images
+          arguments:
+            parameters:
+              [{name: imagesLocation,  value: "{{inputs.parameters.imagesLocation}}"}]
+  
+  # This process assumes the images have been copied to imagesLocation and there is a image_list.json in that folder.
+  - name: images-process
+    inputs:
+      parameters:
+      - name: worldName
+        value: "{{workflow.parameters.worldName}}"
+      - name: imageRepo
+        value: "{{workflow.parameters.imageRepo}}"
+      - name: region
+        value: "{{workflow.parameters.region}}"
+      - name: pipelineLocation
+        value: "{{workflow.parameters.pipelineLocation}}"
+      - name: workingLocation
+        value: "{{workflow.parameters.workingLocation}}"
+      - name: version
+        value: "{{workflow.parameters.version}}"
+      - name: imagesLocation
+      - name: configFile
+        value: "{{workflow.parameters.configFile}}"
+      - name: videoName
+        value: "{{workflow.parameters.fileName}}"
+      - name: videoId
+        value: "{{workflow.parameters.fileId}}"
+      - name: retryCount
+        value: "{{workflow.parameters.retryCount}}"
+      - name: worldPipelineBucket
+        valueFrom:
+          configMapKeyRef:
+            name: "{{workflow.parameters.worldConfig}}"
+            key: pipeline
+      - name: worldIngestBucket
+        valueFrom:
+          configMapKeyRef:
+            name: "{{workflow.parameters.worldConfig}}"
+            key: ingest
+      - name: worldPvc
+        valueFrom:
+          configMapKeyRef:
+            name: "{{workflow.parameters.worldConfig}}"
+            key: pvc
+    dag:
+        tasks:
+        - name: s3-pipe-to-efs
+          template: s3-pipe-to-efs
+          arguments:
+            parameters:
+              [{name: worldPipelineBucket,  value: "{{inputs.parameters.worldPipelineBucket}}"},
+               {name: worldIngestBucket,    value: "{{inputs.parameters.worldIngestBucket}}"},
+               {name: worldPvc,             value: "{{inputs.parameters.worldPvc}}"},
+               {name: worldName,            value: "{{inputs.parameters.worldName}}"},
+               {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+               {name: region,               value: "{{inputs.parameters.region}}"},
+               {name: pipelineLocation,     value: "{{inputs.parameters.pipelineLocation}}"},
+               {name: workingLocation,      value: "{{inputs.parameters.workingLocation}}"},
+               {name: version,              value: "{{inputs.parameters.version}}"},
+               {name: retryCount,           value: "{{inputs.parameters.retryCount}}"},
+               {name: videoId,              value: "{{inputs.parameters.videoId}}"},
+               {name: videoName,            value: "{{inputs.parameters.videoName}}"},
+               {name: imagesLocation,       value: "{{inputs.parameters.imagesLocation}}"},
+               {name: configFile,           value: "{{workflow.parameters.configFile}}"}]
+        - name: global-mask
+          template: global-mask
+          depends: s3-pipe-to-efs
+          arguments:
+            parameters:
+              [{name: worldPvc,             value: "{{inputs.parameters.worldPvc}}"},
+               {name: worldName,            value: "{{inputs.parameters.worldName}}"},
+               {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+               {name: pipelineLocation,     value: "{{inputs.parameters.pipelineLocation}}"},
+               {name: workingLocation,      value: "{{inputs.parameters.workingLocation}}"},
+               {name: version,              value: "{{inputs.parameters.version}}"},
+               {name: retryCount,           value: "{{inputs.parameters.retryCount}}"},
+               {name: videoName,            value: "{{inputs.parameters.imagesLocation}}"},
+               {name: configFile,           value: "{{inputs.parameters.configFile}}"}]
+        - name: increment-step-global-mask
+          template: increment-step
+          depends: global-mask
+          arguments:
+            parameters:
+              [{name: worldPipelineBucket,  value: "{{inputs.parameters.worldPipelineBucket}}"},
+               {name: worldPvc,             value: "{{inputs.parameters.worldPvc}}"},
+               {name: worldName,            value: "{{inputs.parameters.worldName}}"},
+               {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+               {name: region,               value: "{{inputs.parameters.region}}"},
+               {name: pipelineLocation,     value: "{{inputs.parameters.pipelineLocation}}"},
+               {name: version,              value: "{{inputs.parameters.version}}"},
+               {name: retryCount,           value: "{{inputs.parameters.retryCount}}"},
+               {name: videoName,            value: "{{inputs.parameters.videoName}}"},
+               {name: videoId,              value: "{{inputs.parameters.videoId}}"},
+               {name: workflowName,         value: "increment-step-global-mask"},
+               {name: configFile,           value: "{{workflow.parameters.configFile}}"}]
+        - name: skymask
+          template: create-skymasks
+          depends: s3-pipe-to-efs
+          arguments:
+            parameters:
+              [{name: worldPvc,             value: "{{inputs.parameters.worldPvc}}"},
+               {name: worldName,            value: "{{inputs.parameters.worldName}}"},
+               {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+               {name: pipelineLocation,     value: "{{inputs.parameters.pipelineLocation}}"},
+               {name: workingLocation,      value: "{{inputs.parameters.workingLocation}}"},
+               {name: version,              value: "{{inputs.parameters.version}}"},
+               {name: retryCount,           value: "{{inputs.parameters.retryCount}}"},
+               {name: imagesLocation,       value: "{{inputs.parameters.imagesLocation}}"},
+               {name: configFile,           value: "{{inputs.parameters.configFile}}"}]
+        - name: increment-step-skymask
+          template: increment-step
+          depends: skymask
+          arguments:
+            parameters:
+              [{name: worldPipelineBucket,  value: "{{inputs.parameters.worldPipelineBucket}}"},
+               {name: worldPvc,             value: "{{inputs.parameters.worldPvc}}"},
+               {name: worldName,            value: "{{inputs.parameters.worldName}}"},
+               {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+               {name: region,               value: "{{inputs.parameters.region}}"},
+               {name: pipelineLocation,     value: "{{inputs.parameters.pipelineLocation}}"},
+               {name: version,              value: "{{inputs.parameters.version}}"},
+               {name: retryCount,           value: "{{inputs.parameters.retryCount}}"},
+               {name: videoName,            value: "{{inputs.parameters.videoName}}"},
+               {name: videoId,              value: "{{inputs.parameters.videoId}}"},
+               {name: workflowName,         value: "increment-step-skymask"},
+               {name: configFile,           value: "{{workflow.parameters.configFile}}"}]
+        - name: extract-metadata
+          template: extract-metadata
+          depends: s3-pipe-to-efs
+          arguments:
+            parameters:
+              [{name: worldPvc,             value: "{{inputs.parameters.worldPvc}}"},
+               {name: worldName,            value: "{{inputs.parameters.worldName}}"},
+               {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+               {name: pipelineLocation,     value: "{{inputs.parameters.pipelineLocation}}"},
+               {name: workingLocation,      value: "{{inputs.parameters.workingLocation}}"},
+               {name: version,              value: "{{inputs.parameters.version}}"},
+               {name: retryCount,           value: "{{inputs.parameters.retryCount}}"},
+               {name: imagesLocation,       value: "{{inputs.parameters.imagesLocation}}"},
+               {name: videoId,              value: "{{inputs.parameters.videoId}}"},
+               {name: videoName,            value: "{{inputs.parameters.videoName}}"},
+               {name: configFile,           value: "{{inputs.parameters.configFile}}"}]
+        - name: segmentations
+          template: create-segmentations
+          depends: extract-metadata && skymask && global-mask
+          arguments:
+            parameters:
+              [{name: worldPvc,             value: "{{inputs.parameters.worldPvc}}"},
+               {name: worldName,            value: "{{inputs.parameters.worldName}}"},
+               {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+               {name: pipelineLocation,     value: "{{inputs.parameters.pipelineLocation}}"},
+               {name: workingLocation,      value: "{{inputs.parameters.workingLocation}}"},
+               {name: version,              value: "{{inputs.parameters.version}}"},
+               {name: retryCount,           value: "{{inputs.parameters.retryCount}}"},
+               {name: imagesLocation,       value: "{{inputs.parameters.imagesLocation}}"},
+               {name: configFile,           value: "{{inputs.parameters.configFile}}"}]
+        - name: increment-step-segmentations
+          template: increment-step
+          depends: segmentations
+          arguments:
+            parameters:
+              [{name: worldPipelineBucket,  value: "{{inputs.parameters.worldPipelineBucket}}"},
+               {name: worldPvc,             value: "{{inputs.parameters.worldPvc}}"},
+               {name: worldName,            value: "{{inputs.parameters.worldName}}"},
+               {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+               {name: region,               value: "{{inputs.parameters.region}}"},
+               {name: pipelineLocation,     value: "{{inputs.parameters.pipelineLocation}}"},
+               {name: version,              value: "{{inputs.parameters.version}}"},
+               {name: retryCount,           value: "{{inputs.parameters.retryCount}}"},
+               {name: videoName,            value: "{{inputs.parameters.videoName}}"},
+               {name: videoId,              value: "{{inputs.parameters.videoId}}"},
+               {name: workflowName,         value: "increment-step-segmentations"},
+               {name: configFile,           value: "{{workflow.parameters.configFile}}"}]
+        - name: masks
+          template: create-masks
+          depends: extract-metadata && skymask && global-mask
+          arguments:
+            parameters:
+              [{name: worldPvc,             value: "{{inputs.parameters.worldPvc}}"},
+               {name: worldName,            value: "{{inputs.parameters.worldName}}"},
+               {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+               {name: workingLocation,      value: "{{inputs.parameters.workingLocation}}"},
+               {name: pipelineLocation,     value: "{{inputs.parameters.pipelineLocation}}"},
+               {name: version,              value: "{{inputs.parameters.version}}"},
+               {name: retryCount,           value: "{{inputs.parameters.retryCount}}"},
+               {name: imagesLocation,        value: "{{inputs.parameters.imagesLocation}}"},
+               {name: configFile,           value: "{{inputs.parameters.configFile}}"}]
+        - name: increment-step-masks
+          template: increment-step
+          depends: masks
+          arguments:
+            parameters:
+              [{name: worldPipelineBucket,  value: "{{inputs.parameters.worldPipelineBucket}}"},
+               {name: worldPvc,             value: "{{inputs.parameters.worldPvc}}"},
+               {name: worldName,            value: "{{inputs.parameters.worldName}}"},
+               {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+               {name: region,               value: "{{inputs.parameters.region}}"},
+               {name: pipelineLocation,     value: "{{inputs.parameters.pipelineLocation}}"},
+               {name: version,              value: "{{inputs.parameters.version}}"},
+               {name: retryCount,           value: "{{inputs.parameters.retryCount}}"},
+               {name: videoName,            value: "{{inputs.parameters.videoName}}"},
+               {name: videoId,              value: "{{inputs.parameters.videoId}}"},
+               {name: workflowName,         value: "increment-step-masks"},
+               {name: configFile,           value: "{{workflow.parameters.configFile}}"}]
+        - name: detect-features
+          template: detect-features
+          depends: extract-metadata && masks && segmentations
+          arguments:
+            parameters:
+              [{name: worldPvc,             value: "{{inputs.parameters.worldPvc}}"},
+               {name: worldName,            value: "{{inputs.parameters.worldName}}"},
+               {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+               {name: pipelineLocation,     value: "{{inputs.parameters.pipelineLocation}}"},
+               {name: workingLocation,      value: "{{inputs.parameters.workingLocation}}"},
+               {name: version,              value: "{{inputs.parameters.version}}"},
+               {name: retryCount,           value: "{{inputs.parameters.retryCount}}"},
+               {name: imagesLocation,       value: "{{inputs.parameters.imagesLocation}}"},
+               {name: videoId,              value: "{{inputs.parameters.videoId}}"},
+               {name: videoName,            value: "{{inputs.parameters.videoName}}"},
+               {name: configFile,           value: "{{inputs.parameters.configFile}}"}]
+        - name: match-features
+          template: match-features
+          depends: detect-features
+          arguments:
+            parameters:
+              [{name: worldPipelineBucket,  value: "{{inputs.parameters.worldPipelineBucket}}"},
+               {name: worldPvc,             value: "{{inputs.parameters.worldPvc}}"},
+               {name: worldName,            value: "{{inputs.parameters.worldName}}"},
+               {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+               {name: region,               value: "{{inputs.parameters.region}}"},
+               {name: pipelineLocation,     value: "{{inputs.parameters.pipelineLocation}}"},
+               {name: workingLocation,      value: "{{inputs.parameters.workingLocation}}"},
+               {name: version,              value: "{{inputs.parameters.version}}"},
+               {name: retryCount,           value: "{{inputs.parameters.retryCount}}"},
+               {name: imagesLocation,       value: "{{inputs.parameters.imagesLocation}}"},
+               {name: videoId,              value: "{{inputs.parameters.videoId}}"},
+               {name: videoName,            value: "{{inputs.parameters.videoName}}"},
+               {name: configFile,           value: "{{inputs.parameters.configFile}}"}]
+        - name: efs-sync-to-s3
+          template: efs-sync-to-s3
+          depends: match-features
+          arguments:
+            parameters:
+              [{name: worldIngestBucket,    value: "{{inputs.parameters.worldIngestBucket}}"},
+               {name: worldPvc,             value: "{{inputs.parameters.worldPvc}}"},
+               {name: worldName,            value: "{{inputs.parameters.worldName}}"},
+               {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+               {name: region,               value: "{{inputs.parameters.region}}"},
+               {name: pipelineLocation,     value: "{{inputs.parameters.pipelineLocation}}"},
+               {name: workingLocation,      value: "{{inputs.parameters.workingLocation}}"},
+               {name: version,              value: "{{inputs.parameters.version}}"},
+               {name: retryCount,           value: "{{inputs.parameters.retryCount}}"},
+               {name: videoName,            value: "{{inputs.parameters.videoName}}"},
+               {name: videoId,              value: "{{inputs.parameters.videoId}}"},
+               {name: imagesLocation,       value: "{{inputs.parameters.imagesLocation}}"},
+               {name: configFile,           value: "{{inputs.parameters.configFile}}"}]
+
+  - name: s3-pipe-to-efs
+    inputs:
+        parameters:
+        - name: worldPipelineBucket
+        - name: worldIngestBucket
+        - name: worldPvc
+        - name: worldName
+        - name: imageRepo
+        - name: region
+        - name: pipelineLocation
+        - name: workingLocation
+        - name: version
+        - name: retryCount
+        - name: imagesLocation
+        - name: configFile
+        - name: cpuCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: worker-cores
+        - name: memCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: worker-ram
+    retryStrategy:
+        limit: "{{inputs.parameters.retryCount}}"
+        retryPolicy: OnError
+    podSpecPatch: |
+      containers:
+        - name: main
+          resources:
+            requests:
+              cpu: "{{inputs.parameters.cpuCount}}"
+            # limits:
+            #   memory: "{{inputs.parameters.memCount}}"
+    script:
+        image: "{{inputs.parameters.imageRepo}}/worker:{{inputs.parameters.version}}"
+        command: [bash]
+        source: |
+            set -eo pipefail
+            aws s3 cp --region {{inputs.parameters.region}} s3://{{inputs.parameters.worldPipelineBucket}}/{{inputs.parameters.configFile}} {{inputs.parameters.pipelineLocation}}/{{inputs.parameters.configFile}}
+            log_folder=$(jq -r '.logsFolder' {{inputs.parameters.pipelineLocation}}/{{inputs.parameters.configFile}})
+            mkdir -p {{inputs.parameters.pipelineLocation}}/$log_folder
+            exec > >(tee -a {{inputs.parameters.pipelineLocation}}/$log_folder/{{inputs.parameters.imagesLocation}}_{{workflow.name}}_s3_to_efs_sync.log) 2>&1
+
+            start_time=$(date -u +%s)
+              # sync pipeline s3 to pipeline efs
+              echo "{{workflow.name}} syncing S3 Pipeline to EFS Pipeline:"
+              aws s3 sync --region {{inputs.parameters.region}} --no-progress s3://{{inputs.parameters.worldPipelineBucket}} {{inputs.parameters.pipelineLocation}}
+              # AWS pull global mask config, doing this here as global mask is in python so harder to do there
+              aws s3 sync --region {{inputs.parameters.region}} --no-progress s3://{{inputs.parameters.worldIngestBucket}}/resources/ {{inputs.parameters.workingLocation}}/ingest/resources/ 
+            end_time=$(date -u +%s)
+            duration=$((end_time - start_time))
+            formatted_duration=$(printf "%d:%02d:%02d" "$((duration / 3600))" "$(((duration % 3600) / 60))" "$((duration % 60))")
+            echo s3-pipe-to-efs,, $(date +"%Y-%m-%d %H:%M:%S" -ud "@$start_time"), $(date +"%Y-%m-%d %H:%M:%S" -ud "@$end_time"), $formatted_duration >> {{inputs.parameters.pipelineLocation}}/$log_folder/{{inputs.parameters.imagesLocation}}_{{workflow.name}}_times.csv
+        volumeMounts:
+        - name: workdir
+          mountPath: "{{inputs.parameters.workingLocation}}"
+        - name: volumedir
+          mountPath: "{{inputs.parameters.pipelineLocation}}"
+    tolerations:
+    - key: "s3gis.be/pool"
+      operator: "Equal"
+      value: "worker"
+      effect: "NoSchedule"
+    nodeSelector:
+      node-type: worker
+    synchronization:
+      semaphore:
+        configMapKeyRef:
+          name:  "{{workflow.parameters.worldConfig}}"
+          key: worker-limit
+    volumes:
+      - name: volumedir
+        persistentVolumeClaim:
+          claimName: "{{inputs.parameters.worldPvc}}"
+    metadata:
+      labels:
+        world: "{{inputs.parameters.worldName}}"
+        workflow: "{{workflow.name}}"
+
+  - name: archive-extraction
+    inputs:
+        parameters:
+        - name: worldIngestBucket
+        - name: worldPipelineBucket
+        - name: worldPvc
+        - name: worldName
+        - name: imageRepo
+        - name: region
+        - name: pipelineLocation
+        - name: workingLocation
+        - name: version
+        - name: retryCount
+        - name: archiveName
+        - name: configFile
+        - name: cpuCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: worker-cores
+        - name: memCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: worker-ram
+    retryStrategy:
+        limit: "{{inputs.parameters.retryCount}}"
+        retryPolicy: OnError
+    podSpecPatch: |
+      containers:
+        - name: main
+          resources:
+            requests:
+              cpu: "{{inputs.parameters.cpuCount}}"
+            # limits:
+            #   memory: "{{inputs.parameters.memCount}}"
+    script:
+        image: "{{inputs.parameters.imageRepo}}/worker:{{inputs.parameters.version}}"
+        env:
+          - name: S3_MEDIA_MOUNT
+            value: '{{inputs.parameters.pipelineLocation}}'
+          - name: S3_MEDIA_BUCKET
+            value: '{{inputs.parameters.worldIngestBucket}}'
+          - name: S3_MEDIA_PREFIX
+            value: 'videos'
+        command: [bash]
+        source: |
+            set -eo pipefail
+            aws s3 cp --region {{inputs.parameters.region}} s3://{{inputs.parameters.worldPipelineBucket}}/{{inputs.parameters.configFile}} {{inputs.parameters.pipelineLocation}}/{{inputs.parameters.configFile}}
+            log_folder=$(jq -r '.logsFolder' {{inputs.parameters.pipelineLocation}}/{{inputs.parameters.configFile}})
+            mkdir -p {{inputs.parameters.pipelineLocation}}/$log_folder
+            exec > >(tee -a {{inputs.parameters.pipelineLocation}}/$log_folder/{{inputs.parameters.archiveName}}_{{workflow.name}}_archive_extraction.log) 2>&1
+
+            start_time=$(date -u +%s)
+              set -eo pipefail
+              videos_folder=$(jq -r '.videosFolder' {{inputs.parameters.pipelineLocation}}/{{inputs.parameters.configFile}})
+              archives_folder=$(jq -r '.archivesFolder' {{inputs.parameters.pipelineLocation}}/{{inputs.parameters.configFile}})
+              cd {{inputs.parameters.workingLocation}}
+              echo "Pulling down Zip file {{inputs.parameters.archiveName}}"
+              # AWS pull zip file down
+              aws s3 cp --region {{inputs.parameters.region}} --no-progress s3://{{inputs.parameters.worldIngestBucket}}/$archives_folder/{{inputs.parameters.archiveName}}.zip {{inputs.parameters.workingLocation}}/ingest/$archives_folder/{{inputs.parameters.archiveName}}.zip
+              echo "Extracting archive {{inputs.parameters.archiveName}}"
+              mkdir -p {{inputs.parameters.workingLocation}}/ingest/$videos_folder/{{inputs.parameters.archiveName}}
+              unzip {{inputs.parameters.workingLocation}}/ingest/$archives_folder/{{inputs.parameters.archiveName}}.zip -d {{inputs.parameters.workingLocation}}/ingest/$videos_folder/{{inputs.parameters.archiveName}}
+              echo "Pushing video file to S3 Ingest:"
+              aws s3 sync --region {{inputs.parameters.region}} --quiet --no-progress {{inputs.parameters.workingLocation}}/ingest/$videos_folder/{{inputs.parameters.archiveName}} s3://{{inputs.parameters.worldIngestBucket}}/$videos_folder/{{inputs.parameters.archiveName}}
+            end_time=$(date -u +%s)
+            duration=$((end_time - start_time))
+            formatted_duration=$(printf "%d:%02d:%02d" "$((duration / 3600))" "$(((duration % 3600) / 60))" "$((duration % 60))")
+
+            echo archive-extraction,, $(date +"%Y-%m-%d %H:%M:%S" -ud "@$start_time"), $(date +"%Y-%m-%d %H:%M:%S" -ud "@$end_time"), $formatted_duration >> {{inputs.parameters.pipelineLocation}}/$log_folder/{{inputs.parameters.archiveName}}_{{workflow.name}}_times.csv
+        volumeMounts:
+        - name: workdir
+          mountPath: "{{inputs.parameters.workingLocation}}"
+        - name: volumedir
+          mountPath: "{{inputs.parameters.pipelineLocation}}"
+    tolerations:
+    - key: "s3gis.be/pool"
+      operator: "Equal"
+      value: "worker"
+      effect: "NoSchedule"
+    nodeSelector:
+      node-type: worker
+    synchronization:
+      semaphore:
+        configMapKeyRef:
+          name:  "{{workflow.parameters.worldConfig}}"
+          key: worker-limit
+    volumes:
+      - name: volumedir
+        persistentVolumeClaim:
+          claimName: "{{inputs.parameters.worldPvc}}"
+    metadata:
+      labels:
+        world: "{{inputs.parameters.worldName}}"
+        workflow: "{{workflow.name}}"
+
+  - name: s3-pull-video
+    inputs:
+        parameters:
+        - name: worldPipelineBucket
+        - name: worldIngestBucket
+        - name: worldPvc
+        - name: worldName
+        - name: imageRepo
+        - name: region
+        - name: pipelineLocation
+        - name: workingLocation
+        - name: version
+        - name: retryCount
+        - name: videoName
+        - name: configFile
+        - name: cpuCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: video-cpu-cores
+        - name: memCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: video-cpu-ram
+    retryStrategy:
+        limit: "{{inputs.parameters.retryCount}}"
+        retryPolicy: OnError
+    podSpecPatch: |
+      containers:
+        - name: main
+          resources:
+            requests:
+              cpu: "{{inputs.parameters.cpuCount}}"
+            # limits:
+            #   memory: "{{inputs.parameters.memCount}}"
+    script:
+        image: "{{inputs.parameters.imageRepo}}/worker:{{inputs.parameters.version}}"
+        command: [bash]
+        source: |
+            set -eo pipefail
+            aws s3 cp --region {{inputs.parameters.region}} s3://{{inputs.parameters.worldPipelineBucket}}/{{inputs.parameters.configFile}} {{inputs.parameters.pipelineLocation}}/{{inputs.parameters.configFile}}
+            log_folder=$(jq -r '.logsFolder' {{inputs.parameters.pipelineLocation}}/{{inputs.parameters.configFile}})
+            mkdir -p {{inputs.parameters.pipelineLocation}}/$log_folder
+            exec > >(tee -a {{inputs.parameters.pipelineLocation}}/$log_folder/{{inputs.parameters.videoName}}_{{workflow.name}}_s3_pull_video.log) 2>&1
+
+            start_time=$(date -u +%s)
+              set -eo pipefail
+              videos_folder=$(jq -r '.videosFolder' {{inputs.parameters.pipelineLocation}}/{{inputs.parameters.configFile}})
+              echo "Syncing video to working folder"
+              echo aws s3 sync --region {{inputs.parameters.region}} --no-progress s3://{{inputs.parameters.worldIngestBucket}}/$videos_folder/{{inputs.parameters.videoName}} {{inputs.parameters.workingLocation}}/ingest/$videos_folder/{{inputs.parameters.videoName}}
+              aws s3 sync --region {{inputs.parameters.region}} --no-progress s3://{{inputs.parameters.worldIngestBucket}}/$videos_folder/{{inputs.parameters.videoName}} {{inputs.parameters.workingLocation}}/ingest/$videos_folder/{{inputs.parameters.videoName}}
+            end_time=$(date -u +%s)
+            duration=$((end_time - start_time))
+            formatted_duration=$(printf "%d:%02d:%02d" "$((duration / 3600))" "$(((duration % 3600) / 60))" "$((duration % 60))")
+            echo s3-pull-video,, $(date +"%Y-%m-%d %H:%M:%S" -ud "@$start_time"), $(date +"%Y-%m-%d %H:%M:%S" -ud "@$end_time"), $formatted_duration >> {{inputs.parameters.pipelineLocation}}/$log_folder/{{inputs.parameters.videoName}}_{{workflow.name}}_times.csv
+        volumeMounts:
+        - name: workdir
+          mountPath: "{{inputs.parameters.workingLocation}}"
+        - name: volumedir
+          mountPath: "{{inputs.parameters.pipelineLocation}}"
+    tolerations:
+    - key: "s3gis.be/pool"
+      operator: "Equal"
+      value: "video-cpu"
+      effect: "NoSchedule"
+    nodeSelector:
+      node-type: video-cpu
+    synchronization:
+      semaphore:
+        configMapKeyRef:
+          name:  "{{workflow.parameters.worldConfig}}"
+          key: video-cpu-limit
+    volumes:
+      - name: volumedir
+        persistentVolumeClaim:
+          claimName: "{{inputs.parameters.worldPvc}}"
+    metadata:
+      labels:
+        world: "{{inputs.parameters.worldName}}"
+        workflow: "{{workflow.name}}"
+
+  - name: update-media-db
+    inputs:
+        parameters:
+        - name: worldPipelineBucket
+        - name: worldIngestBucket
+        - name: worldPvc
+        - name: worldName
+        - name: imageRepo
+        - name: region
+        - name: pipelineLocation
+        - name: workingLocation
+        - name: version
+        - name: retryCount
+        - name: videoName
+        - name: videoId
+        - name: configFile
+        - name: cpuCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: video-cpu-cores
+        - name: memCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: video-cpu-ram
+    retryStrategy:
+        limit: "{{inputs.parameters.retryCount}}"
+        retryPolicy: OnError
+    podSpecPatch: |
+      containers:
+        - name: main
+          resources:
+            requests:
+              cpu: "{{inputs.parameters.cpuCount}}"
+            # limits:
+            #   memory: "{{inputs.parameters.memCount}}"
+    script:
+        image: "{{inputs.parameters.imageRepo}}/worker:{{inputs.parameters.version}}"
+        command: [bash]
+        source: |
+          set -eo pipefail
+          log_folder=$(jq -r '.logsFolder' {{inputs.parameters.pipelineLocation}}/{{inputs.parameters.configFile}})
+          mkdir -p {{inputs.parameters.pipelineLocation}}/$log_folder
+          exec > >(tee -a {{inputs.parameters.pipelineLocation}}/$log_folder/{{inputs.parameters.videoName}}_{{workflow.name}}_update_media_db.log) 2>&1
+
+          videos_folder=$(jq -r '.videosFolder' {{inputs.parameters.pipelineLocation}}/{{inputs.parameters.configFile}})
+          cd {{inputs.parameters.workingLocation}}/ingest/$videos_folder/{{inputs.parameters.videoName}}
+
+          generate-json() {
+            FILE=$1
+            echo "{
+              \"checksum\": \"$(get-sum $FILE)\",
+              \"name\": \"{{inputs.parameters.videoName}}\",
+              \"id\": \"{{inputs.parameters.videoId}}\",
+              \"size\": $(get-size $FILE),
+              \"type\": \"$(get-type $FILE)\",
+              \"bitrate\": $(get-bitrate $FILE),
+              \"unit\": \"$(get-unit $FILE)\",
+              \"creation\": \"$(get-creation $FILE)\",
+              \"duration\": \"$(get-duration $FILE)\",
+              \"metadata\": \"$(get-metadata $FILE)\",
+              \"mime\": \"$(get-mime $FILE)\",
+              \"world\": \"$2\",
+              \"totalSteps\": \"12\",
+              \"completedSteps\": \"1\",
+              \"bucket\": \"{{inputs.parameters.worldIngestBucket}}\",
+              \"key\": \"$videos_folder/{{inputs.parameters.videoName}}\",
+              \"status\": \"Processing\"
+          }" | tee {{inputs.parameters.videoName}}.json
+          }
+
+          get-sum() {
+            FILE=$1
+            sha256sum $FILE | cut -f1 -d ' '
+          }
+
+          get-size() {
+            FILE=$1
+            ls -l $FILE | awk '{print $5}' | sort -nr | head -1
+          }
+
+          get-mime() {
+            FILE=$1
+            file -b --mime $FILE
+          }
+
+          get-type() {
+            FILE=$1
+            basename $FILE | cut -f2 -d '.'
+          }
+
+          get-metadata() {
+            FILE=$1
+            file -b $FILE
+          }
+
+          # get-project() {
+          #   FILE=$1
+          #   dirname $FILE | sed "s,^$MEDIA_MOUNT,,g;s,^[./]*,,g;s,//,/,g"
+          # }
+
+          get-duration() {
+            FILE=$1
+            TYPE=$(get-type $FILE)
+
+            case $TYPE in
+              360|mp4|LRV)
+                ffprobe $FILE 2>&1 | grep Duration | cut -f1 -d ',' | sed 's,^ *Duration: ,,g'
+                ;;
+              zip|png|py|jpg)
+                echo "0"
+                ;;
+              *)
+                echo "0"
+                ;;
+            esac
+
+          }
+
+          get-bitrate() {
+            FILE=$1
+            TYPE=$(get-type $FILE)
+
+            case $TYPE in
+              360|mp4|LRV)
+                PROBE_LINE=$(ffprobe $FILE 2>&1 | grep Duration | cut -f3 -d ',' | cut -f2 -d ':' | awk '{print $1}')
+                ret=$?
+                if [ $ret -ne 0 ]; then
+                    echo -n 0
+                else
+                    echo -n $PROBE_LINE
+                fi
+                ;;
+              zip|png|py|jpg)
+                echo -n 0
+                ;;
+              *)
+                echo -n 0
+                ;;
+            esac
+
+          }
+
+          get-unit() {
+            FILE=$1
+            TYPE=$(get-type $FILE)
+
+            case $TYPE in
+              360|mp4|LRV)
+                PROBE_LINE=$(ffprobe $FILE 2>&1 | grep Duration | cut -f3 -d ',' | cut -f2 -d ':' | awk '{print $2}' )
+                ret=$?
+                if [ $ret -ne 0 ]; then
+                  echo -n 0
+                else
+                  echo -n $PROBE_LINE
+                fi
+                ;;
+              zip|png|py|jpg)
+                echo "byte"
+                ;;
+              *)
+                echo -n "unknown"
+                ;;
+            esac
+
+          }
+
+          get-creation() {
+            FILE=$1
+            TYPE=$(get-type $FILE)
+
+            case $TYPE in
+              360|mp4|LRV)
+                PROBE_LINE=$(ffprobe $FILE 2>&1 | grep creation_time | head -1 | awk '{print $3}' )
+                ret=$?
+                if [ $ret -ne 0 ]; then
+                  echo -n 0
+                else
+                  echo -n $PROBE_LINE
+                fi
+                ;;
+              *)
+                ls -l --time-style="+%Y-%m-%dT%H:%M:%M.000000Z" $FILE | awk '{print $6}' | sort -nr | head -1
+                ;;
+            esac
+
+          }
+
+          start_time=$(date -u +%s)
+            set -eo pipefail
+            world_id=$(curl -s -X 'GET' 'http://bda-tiledb-ws.bda:8080/world' -H 'accept: */*' | jq -r '.[] | select(.name == "{{inputs.parameters.worldName}}") | .id')
+            
+            echo "Create media record for video"
+            generate-json {{inputs.parameters.videoName}}.360 $world_id
+            
+            echo "Posting video data to DB"
+            response=$(curl -X 'PUT' 'http://bda-tiledb-ws.bda:8080/media/{{inputs.parameters.videoId}}' -w "%{http_code}" -s -o status.json -H 'Content-Type: application/json' -d @{{inputs.parameters.videoName}}.json)
+            if [ "$response" -ne 200 ]; then
+              echo "Source {{inputs.parameters.videoName}} with id {{inputs.parameters.videoId}} had http response code "$response""
+              exit "$response"
+            fi
+
+            mosquitto_pub -h 'mosquitto-mqtts.bda' -t world/$world_id/media/{{inputs.parameters.videoId}} -f status.json
+          end_time=$(date -u +%s)
+          duration=$((end_time - start_time))
+          formatted_duration=$(printf "%d:%02d:%02d" "$((duration / 3600))" "$(((duration % 3600) / 60))" "$((duration % 60))")
+          echo update-media-db,, $(date +"%Y-%m-%d %H:%M:%S" -ud "@$start_time"), $(date +"%Y-%m-%d %H:%M:%S" -ud "@$end_time"), $formatted_duration >> {{inputs.parameters.pipelineLocation}}/$log_folder/{{inputs.parameters.videoName}}_{{workflow.name}}_times.csv
+        volumeMounts:
+        - name: workdir
+          mountPath: "{{inputs.parameters.workingLocation}}"
+        - name: volumedir
+          mountPath: "{{inputs.parameters.pipelineLocation}}"
+    tolerations:
+    - key: "s3gis.be/pool"
+      operator: "Equal"
+      value: "video-cpu"
+      effect: "NoSchedule"
+    nodeSelector:
+      node-type: video-cpu
+    synchronization:
+      semaphore:
+        configMapKeyRef:
+          name:  "{{workflow.parameters.worldConfig}}"
+          key: video-cpu-limit
+    volumes:
+      - name: volumedir
+        persistentVolumeClaim:
+          claimName: "{{inputs.parameters.worldPvc}}"
+    metadata:
+      labels:
+        world: "{{inputs.parameters.worldName}}"
+        workflow: "{{workflow.name}}"
+  
+  - name: global-mask
+    inputs:
+        parameters:
+        - name: worldPvc
+        - name: worldName
+        - name: imageRepo
+        - name: pipelineLocation
+        - name: workingLocation
+        - name: version
+        - name: retryCount
+        - name: videoName
+        - name: configFile
+        - name: cpuCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: worker-cores
+        - name: memCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: worker-ram
+    retryStrategy:
+        limit: "{{inputs.parameters.retryCount}}"
+        retryPolicy: OnError
+    podSpecPatch: |
+      containers:
+        - name: main
+          resources:
+            requests:
+              cpu: "{{inputs.parameters.cpuCount}}"
+            # limits:
+            #   memory: "{{inputs.parameters.memCount}}"
+    script:
+        image: "{{inputs.parameters.imageRepo}}/worker:{{inputs.parameters.version}}"
+        command: [python3]
+        source: |
+          import os
+          import yaml
+          import json
+          import time
+          import shutil
+          import logging
+          import sys
+          from datetime import datetime, timedelta, timezone
+
+          class hourstimedelta(timedelta):
+            def __str__(self):
+              seconds = self.total_seconds()
+              hours = seconds // 3600
+              minutes = (seconds % 3600) // 60
+              seconds = seconds % 60
+              str = '{}:{:02d}:{:02d}'.format(int(hours), int(minutes), int(seconds))
+              return (str)
+
+          section_name = 'data'
+          return_value = 0
+
+          start_time = datetime.utcnow().replace(tzinfo=timezone.utc)
+          with open("{{inputs.parameters.pipelineLocation}}/{{inputs.parameters.configFile}}", 'r') as config_file:
+            config_json = json.load(config_file)
+
+          log_location = config_json.get('logsFolder')
+
+          time_log_path = os.path.join("{{inputs.parameters.pipelineLocation}}", log_location, "{{inputs.parameters.videoName}}_{{workflow.name}}_times.csv")
+
+          log_path = os.path.join("{{inputs.parameters.pipelineLocation}}", log_location, "{{inputs.parameters.videoName}}_{{workflow.name}}_globalMask.log")
+          logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s [%(levelname)s] %(message)s",
+            handlers=[
+                logging.FileHandler(log_path),
+                logging.StreamHandler(sys.stdout)
+            ]
+          )
+
+          globalMask_path = ''
+          mask_settings = config_json.get('MaskSettings')
+          if mask_settings:
+            globalMask_location = mask_settings.get('globalMasksFolder')
+            if globalMask_location:
+              globalMask_path = os.path.join("{{inputs.parameters.pipelineLocation}}", globalMask_location)
+
+              if not os.path.exists(globalMask_path):
+                os.makedirs(globalMask_path)
+
+              with open("{{inputs.parameters.workingLocation}}/ingest/resources/configmap.yaml", 'r') as file:
+                yaml_data = yaml.safe_load(file)
+
+                # Check if the section exists in the YAML data
+                if section_name in yaml_data:
+                  section_data = yaml_data[section_name]
+
+                  # Check if the parameter exists in the section
+                  if '{{inputs.parameters.videoName}}' in section_data:
+                    mask_name = section_data['{{inputs.parameters.videoName}}']
+                    mask_ext = os.path.splitext(mask_name)[1]
+                    mask_path = os.path.join("{{inputs.parameters.workingLocation}}/ingest/resources/", mask_name)
+                    if os.path.exists(mask_path):
+                      video_mask_path = os.path.join(globalMask_path, "{{inputs.parameters.videoName}}" + mask_ext)
+                      shutil.copy(mask_path, video_mask_path)
+                      logging.info(f"Copied {mask_path} to {video_mask_path} for global mask")
+                    else:
+                      logging.error(f"Mask file {mask_path} does not exist.")
+                      return_value = 1
+                  else:
+                    logging.warning(f"Parameter '{{inputs.parameters.videoName}}' not found in section '{section_name}'")
+                else:
+                  logging.error(f"Section '{section_name}' not found in the YAML file'")
+                  return_value = 1
+            else:
+              logging.error(f"globalMasksFolder is not defined in config file: {{inputs.parameters.configFile}} and is required.")
+              return_value = 1
+          else:
+            logging.error(f"MaskSettings not found in config file: {{inputs.parameters.configFile}}")
+            return_value = 1
+          
+          end_time = datetime.utcnow().replace(tzinfo=timezone.utc)
+          duration_seconds = (end_time - start_time).total_seconds()
+
+          duration_str = str(hourstimedelta(seconds=int(duration_seconds)))
+          formatted_start_time = start_time.strftime("%Y-%m-%d %H:%M:%S")
+          formatted_end_time = end_time.strftime("%Y-%m-%d %H:%M:%S")
+          with open(time_log_path, 'a') as time_log_file:
+            time_log_file.write(f"global-mask,, {formatted_start_time}, {formatted_end_time}, {duration_str}\n")
+          sys.exit(return_value)
+        volumeMounts:
+        - name: workdir
+          mountPath: "{{inputs.parameters.workingLocation}}"
+        - name: volumedir
+          mountPath: "{{inputs.parameters.pipelineLocation}}"
+    tolerations:
+    - key: "s3gis.be/pool"
+      operator: "Equal"
+      value: "worker"
+      effect: "NoSchedule"
+    nodeSelector:
+      node-type: worker
+    synchronization:
+      semaphore:
+        configMapKeyRef:
+          name:  "{{workflow.parameters.worldConfig}}"
+          key: worker-limit
+    volumes:
+      - name: volumedir
+        persistentVolumeClaim:
+          claimName: "{{inputs.parameters.worldPvc}}"
+    metadata:
+      labels:
+        world: "{{inputs.parameters.worldName}}"
+        workflow: "{{workflow.name}}"
+
+  - name: gpx-creation
+    inputs:
+        parameters:
+        - name: worldPipelineBucket
+        - name: worldPvc
+        - name: worldName
+        - name: imageRepo
+        - name: pipelineLocation
+        - name: workingLocation
+        - name: version
+        - name: retryCount
+        - name: videoName
+        - name: videoId
+        - name: configFile
+        - name: cpuCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: worker-cores
+        - name: memCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: worker-ram
+    retryStrategy:
+        limit: "{{inputs.parameters.retryCount}}"
+        retryPolicy: OnError
+    podSpecPatch: |
+      containers:
+        - name: main
+          resources:
+            requests:
+              cpu: "{{inputs.parameters.cpuCount}}"
+            # limits:
+            #   memory: "{{inputs.parameters.memCount}}"
+    script:
+        image: "{{inputs.parameters.imageRepo}}/worker:{{inputs.parameters.version}}"
+        command: [bash]
+        source: |
+            set -eo pipefail
+            #aws s3 cp s3://{{inputs.parameters.worldPipelineBucket}}/{{inputs.parameters.configFile}} {{inputs.parameters.pipelineLocation}}/{{inputs.parameters.configFile}}
+            log_folder=$(jq -r '.logsFolder' {{inputs.parameters.pipelineLocation}}/{{inputs.parameters.configFile}})
+            mkdir -p {{inputs.parameters.pipelineLocation}}/$log_folder
+            exec > >(tee -a {{inputs.parameters.pipelineLocation}}/$log_folder/{{inputs.parameters.videoName}}_{{workflow.name}}_gpx_creation.log) 2>&1
+
+            start_time=$(date -u +%s)
+              set -eo pipefail
+              cd {{inputs.parameters.pipelineLocation}}
+              videos_folder=$(jq -r '.videosFolder' {{inputs.parameters.configFile}})
+              # Create gpx file
+              mkdir -p {{inputs.parameters.pipelineLocation}}/gpx
+              gopro2gpx {{inputs.parameters.workingLocation}}/ingest/$videos_folder/{{inputs.parameters.videoName}}/{{inputs.parameters.videoName}}.360 gpx/{{inputs.parameters.videoName}}
+              sed -i 's/<name>.*<\/name>/<name>'{{inputs.parameters.videoName}}'<\/name>/g' gpx/{{inputs.parameters.videoName}}.gpx
+              echo Split and simplify the GPX tracks per zone
+              python3 /src/bda-gpx-utils/gpx-zones.py -s -i gpx/{{inputs.parameters.videoName}}.gpx -c {{inputs.parameters.configFile}} 
+              echo Simplify video track
+              gpxsimplify -d 2 gpx/{{inputs.parameters.videoName}}.gpx
+              mv gpx/_simplified{{inputs.parameters.videoName}}.gpx gpx/{{inputs.parameters.videoName}}_simplified.gpx
+              sed -i 's/<name>.*<\/name>/<name>'{{inputs.parameters.videoName}}'_simplified<\/name>/g' gpx/{{inputs.parameters.videoName}}_simplified.gpx
+              ls -l gpx
+              # Post data to DB
+              echo curl -s -X 'POST' 'http://tile-db.namespace:8080/media' -H 'Content-Type: application/json' -d @gpx/{{inputs.parameters.videoName}}.gpx ;
+              echo curl -s -X 'POST' 'http://tile-db.namespace:8080/media' -H 'Content-Type: application/json' -d @gpx/{{inputs.parameters.videoName}}_simplified.gpx ;
+              echo curl -s -X 'POST' 'http://tile-db.namespace:8080/media' -H 'Content-Type: application/json' -d @gpx_zoned/zoned_{{inputs.parameters.videoName}}_x_y_z.gpx ;
+
+              # Increment step
+              world_id=$(curl -s -X 'GET' 'http://bda-tiledb-ws.bda:8080/world' -H 'accept: */*' | jq -r '.[] | select(.name == "{{inputs.parameters.worldName}}") | .id')
+              response=$(curl -X 'PUT' 'http://bda-tiledb-ws.bda:8080/media/{{inputs.parameters.videoId}}/step' -w "%{http_code}" -s -o status.json -H 'Content-Type: application/json')
+              if [ "$response" -ne 200 ]; then
+                echo "Source {{inputs.parameters.videoName}} with id {{inputs.parameters.videoId}} had http response code "$response" in increment"
+                exit "$response"
+              fi
+              completedSteps=$(curl -X 'GET' 'http://bda-tiledb-ws.bda:8080/media/{{inputs.parameters.videoId}}' -w "%{http_code}" -s -o status.json -H 'Content-Type: application/json')
+              mosquitto_pub -h 'mosquitto-mqtts.bda' -t world/$world_id/media/{{inputs.parameters.videoId}} -f status.json
+            end_time=$(date -u +%s)
+            duration=$((end_time - start_time))
+            formatted_duration=$(printf "%d:%02d:%02d" "$((duration / 3600))" "$(((duration % 3600) / 60))" "$((duration % 60))")
+            echo gpx_creation,, $(date +"%Y-%m-%d %H:%M:%S" -ud "@$start_time"), $(date +"%Y-%m-%d %H:%M:%S" -ud "@$end_time"), $formatted_duration >> {{inputs.parameters.pipelineLocation}}/$log_folder/{{inputs.parameters.videoName}}_{{workflow.name}}_times.csv
+        volumeMounts:
+        - name: workdir
+          mountPath: "{{inputs.parameters.workingLocation}}"
+        - name: volumedir
+          mountPath: "{{inputs.parameters.pipelineLocation}}"
+    tolerations:
+    - key: "s3gis.be/pool"
+      operator: "Equal"
+      value: "worker"
+      effect: "NoSchedule"
+    nodeSelector:
+      node-type: worker
+    synchronization:
+      semaphore:
+        configMapKeyRef:
+          name:  "{{workflow.parameters.worldConfig}}"
+          key: worker-limit
+    volumes:
+      - name: volumedir
+        persistentVolumeClaim:
+          claimName: "{{inputs.parameters.worldPvc}}"
+    metadata:
+      labels:
+        world: "{{inputs.parameters.worldName}}"
+        workflow: "{{workflow.name}}"
+
+  - name: video-sampling
+    inputs:
+        parameters:
+        - name: worldPipelineBucket
+        - name: worldIngestBucket
+        - name: worldPvc
+        - name: worldName
+        - name: imageRepo
+        - name: region
+        - name: pipelineLocation
+        - name: workingLocation
+        - name: version
+        - name: retryCount
+        - name: videoName
+        - name: videoId
+        - name: configFile
+        - name: cpuCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: video-cpu-cores
+        - name: memCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: video-cpu-ram
+    retryStrategy:
+        limit: "{{inputs.parameters.retryCount}}"
+        retryPolicy: OnError
+    podSpecPatch: |
+      containers:
+        - name: main
+          resources:
+            requests:
+              cpu: "{{inputs.parameters.cpuCount}}"
+            # limits:
+            #   memory: "{{inputs.parameters.memCount}}"
+    script:
+        image: "{{inputs.parameters.imageRepo}}/cpu_tasks:{{inputs.parameters.version}}"
+        command: [bash]
+        source: |
+            set -eo pipefail
+            aws s3 cp --region {{inputs.parameters.region}} s3://{{inputs.parameters.worldPipelineBucket}}/{{inputs.parameters.configFile}} {{inputs.parameters.pipelineLocation}}/{{inputs.parameters.configFile}}
+            log_folder=$(jq -r '.logsFolder' {{inputs.parameters.pipelineLocation}}/{{inputs.parameters.configFile}})
+            mkdir -p {{inputs.parameters.pipelineLocation}}/$log_folder
+            exec > >(tee -a {{inputs.parameters.pipelineLocation}}/$log_folder/{{inputs.parameters.videoName}}_{{workflow.name}}_video_sampling.log) 2>&1
+
+            start_time=$(date -u +%s)
+              set -eo pipefail
+              videos_folder=$(jq -r '.videosFolder' {{inputs.parameters.pipelineLocation}}/{{inputs.parameters.configFile}})
+              cd {{inputs.parameters.workingLocation}}/ingest
+              sfm-utils -v
+              
+              # Must use abs path for video file otherwise the parameter is taken as relative to configFile
+              echo sfm-utils sample --sample.imageNameFormatString {{inputs.parameters.videoName}}-%05d --gpx-file {{inputs.parameters.pipelineLocation}}/gpx/{{inputs.parameters.videoName}}.gpx --sample.exifOverridesName {{inputs.parameters.workingLocation}}/ingest/$videos_folder/{{inputs.parameters.videoName}}/image_list.json --load {{inputs.parameters.pipelineLocation}}/{{inputs.parameters.configFile}}
+              sfm-utils sample --sample.imageNameFormatString {{inputs.parameters.videoName}}-%05d --gpx-file {{inputs.parameters.pipelineLocation}}/gpx/{{inputs.parameters.videoName}}.gpx --sample.exifOverridesName {{inputs.parameters.workingLocation}}/ingest/$videos_folder/{{inputs.parameters.videoName}}/image_list.json --load {{inputs.parameters.pipelineLocation}}/{{inputs.parameters.configFile}}
+              echo sfm-utils slice-exif-overrides --sliceExifOverrides.exifOverrides {{inputs.parameters.workingLocation}}/ingest/$videos_folder/{{inputs.parameters.videoName}}/image_list.json --load {{inputs.parameters.pipelineLocation}}/{{inputs.parameters.configFile}} --slice-filename {{inputs.parameters.videoName}}.csv
+              sfm-utils slice-exif-overrides --sliceExifOverrides.exifOverrides {{inputs.parameters.workingLocation}}/ingest/$videos_folder/{{inputs.parameters.videoName}}/image_list.json --load {{inputs.parameters.pipelineLocation}}/{{inputs.parameters.configFile}} --slice-filename {{inputs.parameters.videoName}}.csv
+              echo "Create media record for video"
+              echo "/src/bda-argo-workflows/tools/create-media-record.sh $videos_folder/{{inputs.parameters.videoName}}/{{inputs.parameters.videoName}}.360 > {{inputs.parameters.videoName}}.json"
+              /src/bda-argo-workflows/tools/create-media-record.sh $videos_folder/{{inputs.parameters.videoName}}/{{inputs.parameters.videoName}}.360 > {{inputs.parameters.videoName}}.json
+              cat {{inputs.parameters.videoName}}.json
+              echo curl -s -X 'POST' 'http://tile-db.namespace:8080/media' -H 'Content-Type: application/json' -d @{{inputs.parameters.videoName}}.json ;
+              rm {{inputs.parameters.videoName}}.json
+
+              # Create db entries for images
+              # echo /src/bda-argo-workflows/tools/create-media-record.sh {{inputs.parameters.pipelineLocation}}/images/{{inputs.parameters.videoName}}/{{inputs.parameters.videoName}}.png > {{inputs.parameters.videoName}}.json
+              # echo curl -s -X 'POST' 'http://tile-db.namespace:8080/media' -H 'Content-Type: application/json' -d @{{inputs.parameters.videoName}}_frames.json ;
+
+              # Increment step
+              world_id=$(curl -s -X 'GET' 'http://bda-tiledb-ws.bda:8080/world' -H 'accept: */*' | jq -r '.[] | select(.name == "{{inputs.parameters.worldName}}") | .id')
+              response=$(curl -X 'PUT' 'http://bda-tiledb-ws.bda:8080/media/{{inputs.parameters.videoId}}/step' -w "%{http_code}" -s -o status.json -H 'Content-Type: application/json')
+              if [ "$response" -ne 200 ]; then
+                echo "Source {{inputs.parameters.videoName}} with id {{inputs.parameters.videoId}} had http response code "$response" in increment"
+                exit "$response"
+              fi
+              completedSteps=$(curl -X 'GET' 'http://bda-tiledb-ws.bda:8080/media/{{inputs.parameters.videoId}}' -w "%{http_code}" -s -o status.json -H 'Content-Type: application/json')
+              mosquitto_pub -h 'mosquitto-mqtts.bda' -t world/$world_id/media/{{inputs.parameters.videoId}} -f status.json
+            end_time=$(date -u +%s)
+            duration=$((end_time - start_time))
+            formatted_duration=$(printf "%d:%02d:%02d" "$((duration / 3600))" "$(((duration % 3600) / 60))" "$((duration % 60))")
+            echo video-sampling,, $(date +"%Y-%m-%d %H:%M:%S" -ud "@$start_time"), $(date +"%Y-%m-%d %H:%M:%S" -ud "@$end_time"), $formatted_duration >> {{inputs.parameters.pipelineLocation}}/$log_folder/{{inputs.parameters.videoName}}_{{workflow.name}}_times.csv
+        volumeMounts:
+        - name: workdir
+          mountPath: "{{inputs.parameters.workingLocation}}"
+        - name: volumedir
+          mountPath: "{{inputs.parameters.pipelineLocation}}"
+    tolerations:
+    - key: "s3gis.be/pool"
+      operator: "Equal"
+      value: "video-cpu"
+      effect: "NoSchedule"
+    nodeSelector:
+      node-type: video-cpu
+    synchronization:
+      semaphore:
+        configMapKeyRef:
+          name:  "{{workflow.parameters.worldConfig}}"
+          key: video-cpu-limit
+    volumes:
+      - name: volumedir
+        persistentVolumeClaim:
+          claimName: "{{inputs.parameters.worldPvc}}"
+    metadata:
+      labels:
+        world: "{{inputs.parameters.worldName}}"
+        workflow: "{{workflow.name}}"
+
+  - name: image-extraction
+    inputs:
+        parameters:
+        - name: worldPipelineBucket
+        - name: worldPvc
+        - name: worldName
+        - name: imageRepo
+        - name: region
+        - name: pipelineLocation
+        - name: workingLocation
+        - name: version
+        - name: retryCount
+        - name: videoName
+        - name: videoId
+        - name: configFile
+        - name: cpuCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: video-cpu-cores
+        - name: memCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: video-cpu-ram
+    retryStrategy:
+        limit: "{{inputs.parameters.retryCount}}"
+        retryPolicy: OnError
+    podSpecPatch: |
+      containers:
+        - name: main
+          resources:
+            requests:
+              cpu: "{{inputs.parameters.cpuCount}}"
+            # limits:
+            #   memory: "{{inputs.parameters.memCount}}"
+    script:
+        image: "{{inputs.parameters.imageRepo}}/cpu_tasks:{{inputs.parameters.version}}"
+        command: [bash]
+        source: |
+            set -eo pipefail
+            aws s3 cp --region {{inputs.parameters.region}} s3://{{inputs.parameters.worldPipelineBucket}}/{{inputs.parameters.configFile}} {{inputs.parameters.pipelineLocation}}/{{inputs.parameters.configFile}}
+            log_folder=$(jq -r '.logsFolder' {{inputs.parameters.pipelineLocation}}/{{inputs.parameters.configFile}})
+            mkdir -p {{inputs.parameters.pipelineLocation}}/$log_folder
+            exec > >(tee -a {{inputs.parameters.pipelineLocation}}/$log_folder/{{inputs.parameters.videoName}}_{{workflow.name}}_image_extraction.log) 2>&1
+
+            start_time=$(date -u +%s)
+              set -eo pipefail
+              videos_folder=$(jq -r '.videosFolder' {{inputs.parameters.pipelineLocation}}/{{inputs.parameters.configFile}})
+              image_list=$(jq -r '.sample.exifOverridesName' {{inputs.parameters.pipelineLocation}}/{{inputs.parameters.configFile}})
+              #create temp folders for images to stop match issues with multiple videos
+              mkdir -p {{inputs.parameters.workingLocation}}/{{inputs.parameters.videoName}}
+              cd {{inputs.parameters.workingLocation}}/{{inputs.parameters.videoName}}/
+              cp -v {{inputs.parameters.pipelineLocation}}/{{inputs.parameters.configFile}} {{inputs.parameters.configFile}}
+              360toFrames -i {{inputs.parameters.workingLocation}}/ingest/$videos_folder/{{inputs.parameters.videoName}}/{{inputs.parameters.videoName}}.360 -c {{inputs.parameters.configFile}}
+              # Create symlink for global mask
+              ln -s {{inputs.parameters.pipelineLocation}}/globalMasks globalMasks
+              echo "Copying image list to working directory for image-process"
+              cp -v {{inputs.parameters.workingLocation}}/ingest/$videos_folder/{{inputs.parameters.videoName}}/$image_list {{inputs.parameters.workingLocation}}/{{inputs.parameters.videoName}}/$image_list
+
+              # Increment step
+              world_id=$(curl -s -X 'GET' 'http://bda-tiledb-ws.bda:8080/world' -H 'accept: */*' | jq -r '.[] | select(.name == "{{inputs.parameters.worldName}}") | .id')
+              response=$(curl -X 'PUT' 'http://bda-tiledb-ws.bda:8080/media/{{inputs.parameters.videoId}}/step' -w "%{http_code}" -s -o status.json -H 'Content-Type: application/json')
+              if [ "$response" -ne 200 ]; then
+                echo "Source {{inputs.parameters.videoName}} with id {{inputs.parameters.videoId}} had http response code "$response" in increment"
+                exit "$response"
+              fi
+              completedSteps=$(curl -X 'GET' 'http://bda-tiledb-ws.bda:8080/media/{{inputs.parameters.videoId}}' -w "%{http_code}" -s -o status.json -H 'Content-Type: application/json')
+              mosquitto_pub -h 'mosquitto-mqtts.bda' -t world/$world_id/media/{{inputs.parameters.videoId}} -f status.json
+            end_time=$(date -u +%s)
+            duration=$((end_time - start_time))
+            formatted_duration=$(printf "%d:%02d:%02d" "$((duration / 3600))" "$(((duration % 3600) / 60))" "$((duration % 60))")
+            echo image-extraction,, $(date +"%Y-%m-%d %H:%M:%S" -ud "@$start_time"), $(date +"%Y-%m-%d %H:%M:%S" -ud "@$end_time"), $formatted_duration >> {{inputs.parameters.pipelineLocation}}/$log_folder/{{inputs.parameters.videoName}}_{{workflow.name}}_times.csv
+        volumeMounts:
+        - name: workdir
+          mountPath: "{{inputs.parameters.workingLocation}}"
+        - name: volumedir
+          mountPath: "{{inputs.parameters.pipelineLocation}}"
+    tolerations:
+    - key: "s3gis.be/pool"
+      operator: "Equal"
+      value: "video-cpu"
+      effect: "NoSchedule"
+    nodeSelector:
+      node-type: video-cpu
+    synchronization:
+      semaphore:
+        configMapKeyRef:
+          name:  "{{workflow.parameters.worldConfig}}"
+          key: video-cpu-limit
+    volumes:
+      - name: volumedir
+        persistentVolumeClaim:
+          claimName: "{{inputs.parameters.worldPvc}}"
+    metadata:
+      labels:
+        world: "{{inputs.parameters.worldName}}"
+        workflow: "{{workflow.name}}"
+
+  - name: increment-step
+    inputs:
+        parameters:
+        - name: worldPipelineBucket
+        - name: worldPvc
+        - name: worldName
+        - name: imageRepo
+        - name: region
+        - name: pipelineLocation
+        - name: version
+        - name: retryCount
+        - name: videoName
+        - name: videoId
+        - name: configFile
+        - name: workflowName
+        - name: cpuCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: worker-cores
+        - name: memCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: worker-ram
+    retryStrategy:
+        limit: "{{inputs.parameters.retryCount}}"
+        retryPolicy: OnError
+    podSpecPatch: |
+      containers:
+        - name: main
+          resources:
+            requests:
+              cpu: "{{inputs.parameters.cpuCount}}"
+            # limits:
+            #   memory: "{{inputs.parameters.memCount}}"
+    script:
+        image: "{{inputs.parameters.imageRepo}}/worker:{{inputs.parameters.version}}"
+        command: [bash]
+        source: |
+            set -eo pipefail
+            aws s3 cp --region {{inputs.parameters.region}} s3://{{inputs.parameters.worldPipelineBucket}}/{{inputs.parameters.configFile}} {{inputs.parameters.pipelineLocation}}/{{inputs.parameters.configFile}}
+            log_folder=$(jq -r '.logsFolder' {{inputs.parameters.pipelineLocation}}/{{inputs.parameters.configFile}})
+            mkdir -p {{inputs.parameters.pipelineLocation}}/$log_folder
+            exec > >(tee -a {{inputs.parameters.pipelineLocation}}/$log_folder/{{inputs.parameters.videoName}}_{{inputs.parameters.workflowName}}_increment_step.log) 2>&1
+
+            start_time=$(date -u +%s)
+              set -eo pipefail
+              # Increment step
+              world_id=$(curl -s -X 'GET' 'http://bda-tiledb-ws.bda:8080/world' -H 'accept: */*' | jq -r '.[] | select(.name == "{{inputs.parameters.worldName}}") | .id')
+              response=$(curl -X 'PUT' 'http://bda-tiledb-ws.bda:8080/media/{{inputs.parameters.videoId}}/step' -w "%{http_code}" -s -o status.json -H 'Content-Type: application/json')
+              if [ "$response" -ne 200 ]; then
+                echo "Source {{inputs.parameters.videoName}} with id {{inputs.parameters.videoId}} had http response code "$response" in increment"
+                exit "$response"
+              fi
+              completedSteps=$(curl -X 'GET' 'http://bda-tiledb-ws.bda:8080/media/{{inputs.parameters.videoId}}' -w "%{http_code}" -s -o status.json -H 'Content-Type: application/json')
+              mosquitto_pub -h 'mosquitto-mqtts.bda' -t world/$world_id/media/{{inputs.parameters.videoId}} -f status.json
+            end_time=$(date -u +%s)
+            duration=$((end_time - start_time))
+            formatted_duration=$(printf "%d:%02d:%02d" "$((duration / 3600))" "$(((duration % 3600) / 60))" "$((duration % 60))")
+            echo increment-step,, $(date +"%Y-%m-%d %H:%M:%S" -ud "@$start_time"), $(date +"%Y-%m-%d %H:%M:%S" -ud "@$end_time"), $formatted_duration >> {{inputs.parameters.pipelineLocation}}/$log_folder/{{inputs.parameters.videoName}}_{{workflow.name}}_times.csv
+        volumeMounts:
+        - name: volumedir
+          mountPath: "{{inputs.parameters.pipelineLocation}}"
+    tolerations:
+    - key: "s3gis.be/pool"
+      operator: "Equal"
+      value: "worker"
+      effect: "NoSchedule"
+    nodeSelector:
+      node-type: worker
+    synchronization:
+      semaphore:
+        configMapKeyRef:
+          name:  "{{workflow.parameters.worldConfig}}"
+          key: worker-limit
+    volumes:
+      - name: volumedir
+        persistentVolumeClaim:
+          claimName: "{{inputs.parameters.worldPvc}}"
+    metadata:
+      labels:
+        world: "{{inputs.parameters.worldName}}"
+        workflow: "{{workflow.name}}"
+
+  - name: s3-pull-images
+    inputs:
+        parameters:
+        - name: worldPipelineBucket
+        - name: worldIngestBucket
+        - name: worldPvc
+        - name: worldName
+        - name: imageRepo
+        - name: region
+        - name: pipelineLocation
+        - name: workingLocation
+        - name: version
+        - name: retryCount
+        - name: imagesLocation
+        - name: configFile
+        - name: cpuCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: worker-cores
+        - name: memCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: worker-ram
+    retryStrategy:
+        limit: "{{inputs.parameters.retryCount}}"
+        retryPolicy: OnError
+    podSpecPatch: |
+      containers:
+        - name: main
+          resources:
+            requests:
+              cpu: "{{inputs.parameters.cpuCount}}"
+            # limits:
+            #   memory: "{{inputs.parameters.memCount}}"
+    script:
+        image: "{{inputs.parameters.imageRepo}}/worker:{{inputs.parameters.version}}"
+        command: [bash]
+        source: |
+            set -eo pipefail
+            aws s3 cp --region {{inputs.parameters.region}} s3://{{inputs.parameters.worldPipelineBucket}}/{{inputs.parameters.configFile}} {{inputs.parameters.pipelineLocation}}/{{inputs.parameters.configFile}}
+            log_folder=$(jq -r '.logsFolder' {{inputs.parameters.pipelineLocation}}/{{inputs.parameters.configFile}})
+            mkdir -p {{inputs.parameters.pipelineLocation}}/$log_folder
+            exec > >(tee -a {{inputs.parameters.pipelineLocation}}/$log_folder/{{inputs.parameters.imagesLocation}}_{{workflow.name}}_s3_pull_images.log) 2>&1
+
+            start_time=$(date -u +%s)
+              images_folder=$(jq -r '.imagesFolder' {{inputs.parameters.pipelineLocation}}/{{inputs.parameters.configFile}})
+              image_list=$(jq -r '.sample.exifOverridesName' {{inputs.parameters.pipelineLocation}}/{{inputs.parameters.configFile}})
+              # Ingest needs to exist for pushing back up in cases where videos/archives were used so making it so we dont error
+              mkdir -p {{inputs.parameters.workingLocation}}/ingest
+              mkdir -p {{inputs.parameters.workingLocation}}/{{inputs.parameters.imagesLocation}}
+              cd {{inputs.parameters.workingLocation}}/{{inputs.parameters.imagesLocation}}/
+              cp -v {{inputs.parameters.pipelineLocation}}/{{inputs.parameters.configFile}} {{inputs.parameters.configFile}}
+              # sync images to working dir
+              echo "{{workflow.name}} syncing S3 Ingest Images to {{inputs.parameters.workingLocation}}/$images_folder"
+              # assumes that image_list.json is located inside of imagesLocation folder
+              echo aws s3 sync --region {{inputs.parameters.region}} --no-progress s3://{{inputs.parameters.worldIngestBucket}}/$images_folder/{{inputs.parameters.imagesLocation}} {{inputs.parameters.workingLocation}}/{{inputs.parameters.imagesLocation}}/$images_folder
+              aws s3 sync --region {{inputs.parameters.region}} --no-progress s3://{{inputs.parameters.worldIngestBucket}}/$images_folder/{{inputs.parameters.imagesLocation}} {{inputs.parameters.workingLocation}}/{{inputs.parameters.imagesLocation}}/$images_folder
+              mv $images_folder/$image_list $image_list
+              # Create symlink for global mask
+              ln -s {{inputs.parameters.pipelineLocation}}/globalMasks globalMasks
+            end_time=$(date -u +%s)
+            duration=$((end_time - start_time))
+            formatted_duration=$(printf "%d:%02d:%02d" "$((duration / 3600))" "$(((duration % 3600) / 60))" "$((duration % 60))")
+            echo s3-pull-images,, $(date +"%Y-%m-%d %H:%M:%S" -ud "@$start_time"), $(date +"%Y-%m-%d %H:%M:%S" -ud "@$end_time"), $formatted_duration >> {{inputs.parameters.pipelineLocation}}/$log_folder/{{inputs.parameters.imagesLocation}}_{{workflow.name}}_times.csv
+        volumeMounts:
+        - name: workdir
+          mountPath: "{{inputs.parameters.workingLocation}}"
+        - name: volumedir
+          mountPath: "{{inputs.parameters.pipelineLocation}}"
+    tolerations:
+    - key: "s3gis.be/pool"
+      operator: "Equal"
+      value: "worker"
+      effect: "NoSchedule"
+    nodeSelector:
+      node-type: worker
+    synchronization:
+      semaphore:
+        configMapKeyRef:
+          name:  "{{workflow.parameters.worldConfig}}"
+          key: worker-limit
+    volumes:
+      - name: volumedir
+        persistentVolumeClaim:
+          claimName: "{{inputs.parameters.worldPvc}}"
+    metadata:
+      labels:
+        world: "{{inputs.parameters.worldName}}"
+        workflow: "{{workflow.name}}"
+  
+  - name: create-skymasks
+    inputs:
+        parameters:
+        - name: worldPvc
+        - name: worldName
+        - name: imageRepo
+        - name: pipelineLocation
+        - name: workingLocation
+        - name: version
+        - name: retryCount
+        - name: imagesLocation
+        - name: configFile
+        - name: cpuCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: video-gpu-cores
+        - name: memCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: video-gpu-ram
+    retryStrategy:
+        limit: "{{inputs.parameters.retryCount}}"
+        retryPolicy: OnError
+    podSpecPatch: |
+      containers:
+        - name: main
+          resources:
+            requests:
+              cpu: "{{inputs.parameters.cpuCount}}"
+            # limits:
+            #   memory: "{{inputs.parameters.memCount}}"
+    script:
+        image: "{{inputs.parameters.imageRepo}}/skymask:{{inputs.parameters.version}}"
+        command: [bash]
+        source: |
+            set -eo pipefail
+            log_folder=$(jq -r '.logsFolder' {{inputs.parameters.pipelineLocation}}/{{inputs.parameters.configFile}})
+            mkdir -p {{inputs.parameters.pipelineLocation}}/$log_folder
+            exec > >(tee -a {{inputs.parameters.pipelineLocation}}/$log_folder/{{inputs.parameters.imagesLocation}}_{{workflow.name}}_create_skymasks.log) 2>&1
+
+            start_time=$(date -u +%s)
+              set -eo pipefail
+              cd {{inputs.parameters.workingLocation}}/{{inputs.parameters.imagesLocation}}
+              image_list=$(jq -r '.sample.exifOverridesName' {{inputs.parameters.configFile}})
+              SkyMask -i $image_list -c {{inputs.parameters.configFile}}
+            end_time=$(date -u +%s)
+            duration=$((end_time - start_time))
+            formatted_duration=$(printf "%d:%02d:%02d" "$((duration / 3600))" "$(((duration % 3600) / 60))" "$((duration % 60))")
+            echo create-skymasks,, $(date +"%Y-%m-%d %H:%M:%S" -ud "@$start_time"), $(date +"%Y-%m-%d %H:%M:%S" -ud "@$end_time"), $formatted_duration >> {{inputs.parameters.pipelineLocation}}/$log_folder/{{inputs.parameters.imagesLocation}}_{{workflow.name}}_times.csv
+        volumeMounts:
+        - name: workdir
+          mountPath: "{{inputs.parameters.workingLocation}}"
+        - name: volumedir
+          mountPath: "{{inputs.parameters.pipelineLocation}}"
+    tolerations:
+    - key: "s3gis.be/pool"
+      operator: "Equal"
+      value: "video-gpu"
+      effect: "NoSchedule"
+    nodeSelector:
+      node-type: video-gpu
+    synchronization:
+      semaphore:
+        configMapKeyRef:
+          name:  "{{workflow.parameters.worldConfig}}"
+          key: video-gpu-limit
+    volumes:
+      - name: volumedir
+        persistentVolumeClaim:
+          claimName: "{{inputs.parameters.worldPvc}}"
+    metadata:
+      labels:
+        world: "{{inputs.parameters.worldName}}"
+        workflow: "{{workflow.name}}"
+
+  - name: create-segmentations
+    inputs:
+        parameters:
+        - name: worldPvc
+        - name: worldName
+        - name: imageRepo
+        - name: pipelineLocation
+        - name: workingLocation
+        - name: version
+        - name: retryCount
+        - name: imagesLocation
+        - name: configFile
+        - name: cpuCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: video-gpu-cores
+        - name: memCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: video-gpu-ram
+    retryStrategy:
+        limit: "{{inputs.parameters.retryCount}}"
+        retryPolicy: OnError
+    podSpecPatch: |
+      containers:
+        - name: main
+          resources:
+            requests:
+              cpu: "{{inputs.parameters.cpuCount}}"
+            # limits:
+            #   memory: "{{inputs.parameters.memCount}}"
+    script:
+        image: "{{inputs.parameters.imageRepo}}/gpu_tasks:{{inputs.parameters.version}}"
+        command: [bash]
+        source: |
+            set -eo pipefail
+            log_folder=$(jq -r '.logsFolder' {{inputs.parameters.pipelineLocation}}/{{inputs.parameters.configFile}})
+            mkdir -p {{inputs.parameters.pipelineLocation}}/$log_folder
+            exec > >(tee -a {{inputs.parameters.pipelineLocation}}/$log_folder/{{inputs.parameters.imagesLocation}}_{{workflow.name}}_create_segmentations.log) 2>&1
+
+            start_time=$(date -u +%s)
+              set -eo pipefail
+              cd {{inputs.parameters.workingLocation}}/{{inputs.parameters.imagesLocation}}
+              image_list=$(jq -r '.sample.exifOverridesName' {{inputs.parameters.configFile}})
+              python3 /src/bda-detectron/makeMasks.py --segmentations -i $image_list -c {{inputs.parameters.configFile}}
+            end_time=$(date -u +%s)
+            duration=$((end_time - start_time))
+            formatted_duration=$(printf "%d:%02d:%02d" "$((duration / 3600))" "$(((duration % 3600) / 60))" "$((duration % 60))")
+            echo create-segmentations,, $(date +"%Y-%m-%d %H:%M:%S" -ud "@$start_time"), $(date +"%Y-%m-%d %H:%M:%S" -ud "@$end_time"), $formatted_duration >> {{inputs.parameters.pipelineLocation}}/$log_folder/{{inputs.parameters.imagesLocation}}_{{workflow.name}}_times.csv
+        volumeMounts:
+        - name: workdir
+          mountPath: "{{inputs.parameters.workingLocation}}"
+        - name: volumedir
+          mountPath: "{{inputs.parameters.pipelineLocation}}"
+    tolerations:
+    - key: "s3gis.be/pool"
+      operator: "Equal"
+      value: "video-gpu"
+      effect: "NoSchedule"
+    nodeSelector:
+      node-type: video-gpu
+    synchronization:
+      semaphore:
+        configMapKeyRef:
+          name:  "{{workflow.parameters.worldConfig}}"
+          key: video-gpu-limit
+    volumes:
+      - name: volumedir
+        persistentVolumeClaim:
+          claimName: "{{inputs.parameters.worldPvc}}"
+    metadata:
+      labels:
+        world: "{{inputs.parameters.worldName}}"
+        workflow: "{{workflow.name}}"
+
+  - name: create-masks
+    inputs:
+        parameters:
+        - name: worldPvc
+        - name: worldName
+        - name: imageRepo
+        - name: pipelineLocation
+        - name: workingLocation
+        - name: version
+        - name: retryCount
+        - name: imagesLocation
+        - name: configFile
+        - name: cpuCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: video-gpu-cores
+        - name: memCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: video-gpu-ram
+    retryStrategy:
+        limit: "{{inputs.parameters.retryCount}}"
+        retryPolicy: OnError
+    podSpecPatch: |
+      containers:
+        - name: main
+          resources:
+            requests:
+              cpu: "{{inputs.parameters.cpuCount}}"
+            # limits:
+            #   memory: "{{inputs.parameters.memCount}}"
+    script:
+        image: "{{inputs.parameters.imageRepo}}/gpu_tasks:{{inputs.parameters.version}}"
+        command: [bash]
+        source: |
+            set -eo pipefail
+            log_folder=$(jq -r '.logsFolder' {{inputs.parameters.pipelineLocation}}/{{inputs.parameters.configFile}})
+            mkdir -p {{inputs.parameters.pipelineLocation}}/$log_folder
+            exec > >(tee -a {{inputs.parameters.pipelineLocation}}/$log_folder/{{inputs.parameters.imagesLocation}}_{{workflow.name}}_create_masks.log) 2>&1
+
+            start_time=$(date -u +%s)
+              set -eo pipefail
+              cd {{inputs.parameters.workingLocation}}/{{inputs.parameters.imagesLocation}}
+              image_list=$(jq -r '.sample.exifOverridesName' {{inputs.parameters.configFile}})
+              python3 /src/bda-detectron/makeMasks.py --masks -i $image_list -c {{inputs.parameters.configFile}}
+            end_time=$(date -u +%s)
+            duration=$((end_time - start_time))
+            formatted_duration=$(printf "%d:%02d:%02d" "$((duration / 3600))" "$(((duration % 3600) / 60))" "$((duration % 60))")
+            echo create-masks,, $(date +"%Y-%m-%d %H:%M:%S" -ud "@$start_time"), $(date +"%Y-%m-%d %H:%M:%S" -ud "@$end_time"), $formatted_duration >> {{inputs.parameters.pipelineLocation}}/$log_folder/{{inputs.parameters.imagesLocation}}_{{workflow.name}}_times.csv
+        volumeMounts:
+        - name: workdir
+          mountPath: "{{inputs.parameters.workingLocation}}"
+        - name: volumedir
+          mountPath: "{{inputs.parameters.pipelineLocation}}"
+    tolerations:
+    - key: "s3gis.be/pool"
+      operator: "Equal"
+      value: "video-gpu"
+      effect: "NoSchedule"
+    nodeSelector:
+      node-type: video-gpu
+    synchronization:
+      semaphore:
+        configMapKeyRef:
+          name:  "{{workflow.parameters.worldConfig}}"
+          key: video-gpu-limit
+    volumes:
+      - name: volumedir
+        persistentVolumeClaim:
+          claimName: "{{inputs.parameters.worldPvc}}"
+    metadata:
+      labels:
+        world: "{{inputs.parameters.worldName}}"
+        workflow: "{{workflow.name}}"
+
+  - name: extract-metadata
+    inputs:
+        parameters:
+        - name: worldPvc
+        - name: worldName
+        - name: imageRepo
+        - name: pipelineLocation
+        - name: workingLocation
+        - name: version
+        - name: retryCount
+        - name: imagesLocation
+        - name: videoId
+        - name: videoName
+        - name: configFile
+        - name: cpuCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: video-cpu-cores
+        - name: memCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: video-cpu-ram
+    retryStrategy:
+        limit: "{{inputs.parameters.retryCount}}"
+        retryPolicy: OnError
+    podSpecPatch: |
+      containers:
+        - name: main
+          resources:
+            requests:
+              cpu: "{{inputs.parameters.cpuCount}}"
+            # limits:
+            #   memory: "{{inputs.parameters.memCount}}"
+    script:
+        image: "{{inputs.parameters.imageRepo}}/cpu_tasks:{{inputs.parameters.version}}"
+        command: [bash]
+        source: |
+            set -eo pipefail
+            log_folder=$(jq -r '.logsFolder' {{inputs.parameters.pipelineLocation}}/{{inputs.parameters.configFile}})
+            mkdir -p {{inputs.parameters.pipelineLocation}}/$log_folder
+            exec > >(tee -a {{inputs.parameters.pipelineLocation}}/$log_folder/{{inputs.parameters.imagesLocation}}_{{workflow.name}}_extract_metadata.log) 2>&1
+
+            start_time=$(date -u +%s)
+              set -eo pipefail
+              cd {{inputs.parameters.workingLocation}}/{{inputs.parameters.imagesLocation}}
+              cp -v {{inputs.parameters.pipelineLocation}}/{{inputs.parameters.configFile}} {{inputs.parameters.configFile}}
+              videos_folder=$(jq -r '.videosFolder' {{inputs.parameters.configFile}})
+              image_list=$(jq -r '.sample.exifOverridesName' {{inputs.parameters.configFile}})
+              # Generate the sfm config files using pod cpu count in new folder
+              sfm-utils create-opensfm-configs --proc-count {{inputs.parameters.cpuCount}} --load {{inputs.parameters.configFile}} --config-path config.yaml
+              ln -s $image_list exif_overrides.json
+              sfm-utils profile --profiling.path profiling_{{inputs.parameters.imagesLocation}}_{{workflow.name}}_extract_metadata.csv --load {{inputs.parameters.pipelineLocation}}/{{inputs.parameters.configFile}} opensfm extract_metadata {{inputs.parameters.workingLocation}}/{{inputs.parameters.imagesLocation}}
+              
+              # Increment step
+              world_id=$(curl -s -X 'GET' 'http://bda-tiledb-ws.bda:8080/world' -H 'accept: */*' | jq -r '.[] | select(.name == "{{inputs.parameters.worldName}}") | .id')
+              response=$(curl -X 'PUT' 'http://bda-tiledb-ws.bda:8080/media/{{inputs.parameters.videoId}}/step' -w "%{http_code}" -s -o status.json -H 'Content-Type: application/json')
+              if [ "$response" -ne 200 ]; then
+                echo "Source {{inputs.parameters.videoName}} with id {{inputs.parameters.videoId}} had http response code "$response" in increment"
+                exit "$response"
+              fi
+              completedSteps=$(curl -X 'GET' 'http://bda-tiledb-ws.bda:8080/media/{{inputs.parameters.videoId}}' -w "%{http_code}" -s -o status.json -H 'Content-Type: application/json')
+              mosquitto_pub -h 'mosquitto-mqtts.bda' -t world/$world_id/media/{{inputs.parameters.videoId}} -f status.json
+            end_time=$(date -u +%s)
+            duration=$((end_time - start_time))
+            formatted_duration=$(printf "%d:%02d:%02d" "$((duration / 3600))" "$(((duration % 3600) / 60))" "$((duration % 60))")
+            echo extract-metadata,, $(date +"%Y-%m-%d %H:%M:%S" -ud "@$start_time"), $(date +"%Y-%m-%d %H:%M:%S" -ud "@$end_time"), $formatted_duration >> {{inputs.parameters.pipelineLocation}}/$log_folder/{{inputs.parameters.imagesLocation}}_{{workflow.name}}_times.csv
+        volumeMounts:
+        - name: workdir
+          mountPath: "{{inputs.parameters.workingLocation}}"
+        - name: volumedir
+          mountPath: "{{inputs.parameters.pipelineLocation}}"
+    tolerations:
+    - key: "s3gis.be/pool"
+      operator: "Equal"
+      value: "video-cpu"
+      effect: "NoSchedule"
+    nodeSelector:
+      node-type: video-cpu
+    synchronization:
+      semaphore:
+        configMapKeyRef:
+          name:  "{{workflow.parameters.worldConfig}}"
+          key: video-cpu-limit
+    volumes:
+      - name: volumedir
+        persistentVolumeClaim:
+          claimName: "{{inputs.parameters.worldPvc}}"
+    metadata:
+      labels:
+        world: "{{inputs.parameters.worldName}}"
+        workflow: "{{workflow.name}}"
+
+  - name: detect-features
+    inputs:
+        parameters:
+        - name: worldPvc
+        - name: worldName
+        - name: imageRepo
+        - name: pipelineLocation
+        - name: workingLocation
+        - name: version
+        - name: retryCount
+        - name: imagesLocation
+        - name: configFile
+        - name: videoId
+        - name: videoName
+        - name: cpuCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: video-cpu-cores
+        - name: memCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: video-cpu-ram
+    retryStrategy:
+        limit: "{{inputs.parameters.retryCount}}"
+        retryPolicy: OnError
+    podSpecPatch: |
+      containers:
+        - name: main
+          resources:
+            requests:
+              cpu: "{{inputs.parameters.cpuCount}}"
+            # limits:
+            #   memory: "{{inputs.parameters.memCount}}"
+    script:
+        image: "{{inputs.parameters.imageRepo}}/cpu_tasks:{{inputs.parameters.version}}"
+        command: [bash]
+        source: |
+            set -eo pipefail
+            log_folder=$(jq -r '.logsFolder' {{inputs.parameters.pipelineLocation}}/{{inputs.parameters.configFile}})
+            mkdir -p {{inputs.parameters.pipelineLocation}}/$log_folder
+            exec > >(tee -a {{inputs.parameters.pipelineLocation}}/$log_folder/{{inputs.parameters.imagesLocation}}_{{workflow.name}}_detect_features.log) 2>&1
+
+            start_time=$(date -u +%s)
+              set -eo pipefail
+              cd {{inputs.parameters.workingLocation}}/{{inputs.parameters.imagesLocation}}
+              # Generate the sfm config files using pod cpu count in new folder
+              sfm-utils create-opensfm-configs --proc-count {{inputs.parameters.cpuCount}} --load {{inputs.parameters.configFile}} --config-path config.yaml
+              sfm-utils profile --profiling.path profiling_{{inputs.parameters.imagesLocation}}_{{workflow.name}}_detect_features.csv --load {{inputs.parameters.pipelineLocation}}/{{inputs.parameters.configFile}} opensfm detect_features {{inputs.parameters.workingLocation}}/{{inputs.parameters.imagesLocation}}
+              
+              # Increment step
+              world_id=$(curl -s -X 'GET' 'http://bda-tiledb-ws.bda:8080/world' -H 'accept: */*' | jq -r '.[] | select(.name == "{{inputs.parameters.worldName}}") | .id')
+              response=$(curl -X 'PUT' 'http://bda-tiledb-ws.bda:8080/media/{{inputs.parameters.videoId}}/step' -w "%{http_code}" -s -o status.json -H 'Content-Type: application/json')
+              if [ "$response" -ne 200 ]; then
+                echo "Source {{inputs.parameters.videoName}} with id {{inputs.parameters.videoId}} had http response code "$response" in increment"
+                exit "$response"
+              fi
+              completedSteps=$(curl -X 'GET' 'http://bda-tiledb-ws.bda:8080/media/{{inputs.parameters.videoId}}' -w "%{http_code}" -s -o status.json -H 'Content-Type: application/json')
+              mosquitto_pub -h 'mosquitto-mqtts.bda' -t world/$world_id/media/{{inputs.parameters.videoId}} -f status.json
+            end_time=$(date -u +%s)
+            duration=$((end_time - start_time))
+            formatted_duration=$(printf "%d:%02d:%02d" "$((duration / 3600))" "$(((duration % 3600) / 60))" "$((duration % 60))")
+            echo detect-features,, $(date +"%Y-%m-%d %H:%M:%S" -ud "@$start_time"), $(date +"%Y-%m-%d %H:%M:%S" -ud "@$end_time"), $formatted_duration >> {{inputs.parameters.pipelineLocation}}/$log_folder/{{inputs.parameters.imagesLocation}}_{{workflow.name}}_times.csv
+        volumeMounts:
+        - name: workdir
+          mountPath: "{{inputs.parameters.workingLocation}}"
+        - name: volumedir
+          mountPath: "{{inputs.parameters.pipelineLocation}}"
+    tolerations:
+    - key: "s3gis.be/pool"
+      operator: "Equal"
+      value: "video-cpu"
+      effect: "NoSchedule"
+    nodeSelector:
+      node-type: video-cpu
+    synchronization:
+      semaphore:
+        configMapKeyRef:
+          name:  "{{workflow.parameters.worldConfig}}"
+          key: video-cpu-limit
+    volumes:
+      - name: volumedir
+        persistentVolumeClaim:
+          claimName: "{{inputs.parameters.worldPvc}}"
+    metadata:
+      labels:
+        world: "{{inputs.parameters.worldName}}"
+        workflow: "{{workflow.name}}"
+
+  - name: match-features
+    inputs:
+        parameters:
+        - name: worldPipelineBucket
+        - name: worldPvc
+        - name: worldName
+        - name: imageRepo
+        - name: region
+        - name: pipelineLocation
+        - name: workingLocation
+        - name: version
+        - name: retryCount
+        - name: imagesLocation
+        - name: configFile
+        - name: videoId
+        - name: videoName
+        - name: cpuCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: video-match-cores
+        - name: memCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: video-match-ram
+    retryStrategy:
+        limit: "{{inputs.parameters.retryCount}}"
+        retryPolicy: OnError
+    podSpecPatch: |
+      containers:
+        - name: main
+          resources:
+            requests:
+              cpu: "{{inputs.parameters.cpuCount}}"
+            # limits:
+            #   memory: "{{inputs.parameters.memCount}}"
+    script:
+        image: "{{inputs.parameters.imageRepo}}/cpu_tasks:{{inputs.parameters.version}}"
+        command: [bash]
+        source: |
+            set -eo pipefail
+            log_folder=$(jq -r '.logsFolder' {{inputs.parameters.pipelineLocation}}/{{inputs.parameters.configFile}})
+            mkdir -p {{inputs.parameters.pipelineLocation}}/$log_folder
+            exec > >(tee -a {{inputs.parameters.pipelineLocation}}/$log_folder/{{inputs.parameters.imagesLocation}}_{{workflow.name}}_match_features.log) 2>&1
+
+            start_time=$(date -u +%s)
+              set -eo pipefail
+              cd {{inputs.parameters.workingLocation}}/{{inputs.parameters.imagesLocation}}
+              # Copy images, exif, features to world volume now that we are ready for matching
+              cp -rv features {{inputs.parameters.pipelineLocation}}
+              cp -rv exif {{inputs.parameters.pipelineLocation}}
+              cp -v camera_models.json {{inputs.parameters.pipelineLocation}}/camera_models.json
+              cp -rv skyMasks {{inputs.parameters.pipelineLocation}}
+              cp -rv masks {{inputs.parameters.pipelineLocation}}
+              cp -rv segmentations {{inputs.parameters.pipelineLocation}}
+              cp -rv images {{inputs.parameters.pipelineLocation}}
+              cp -rv logs {{inputs.parameters.pipelineLocation}}
+              # Clean up temp folder
+              cd /
+              rm -r {{inputs.parameters.workingLocation}}/{{inputs.parameters.imagesLocation}}
+              # Generate the sfm config files using specific proc count
+              cd {{inputs.parameters.pipelineLocation}}
+              sfm-utils create-opensfm-configs --proc-count 16 --load {{inputs.parameters.pipelineLocation}}/{{inputs.parameters.configFile}}
+              sfm-utils profile --profiling.path profiling_{{inputs.parameters.imagesLocation}}_{{workflow.name}}_match_features.csv --load {{inputs.parameters.pipelineLocation}}/{{inputs.parameters.configFile}} opensfm match_features {{inputs.parameters.pipelineLocation}}
+
+              # Must sync efs to s3 inside of match pod in order to avoid trying to sync files of the next zone as its files are copied in for match
+              echo "{{workflow.name}} Syncing EFS Pipeline to S3 Pipeline:"
+              aws s3 sync --region {{inputs.parameters.region}} --no-progress --no-follow-symlinks {{inputs.parameters.pipelineLocation}}/ s3://{{inputs.parameters.worldPipelineBucket}}
+             
+              # Increment step
+              world_id=$(curl -s -X 'GET' 'http://bda-tiledb-ws.bda:8080/world' -H 'accept: */*' | jq -r '.[] | select(.name == "{{inputs.parameters.worldName}}") | .id')
+              response=$(curl -X 'PUT' 'http://bda-tiledb-ws.bda:8080/media/{{inputs.parameters.videoId}}/step' -w "%{http_code}" -s -o status.json -H 'Content-Type: application/json')
+              if [ "$response" -ne 200 ]; then
+                echo "Source {{inputs.parameters.videoName}} with id {{inputs.parameters.videoId}} had http response code "$response" in increment"
+                exit "$response"
+              fi
+              completedSteps=$(curl -X 'GET' 'http://bda-tiledb-ws.bda:8080/media/{{inputs.parameters.videoId}}' -w "%{http_code}" -s -o status.json -H 'Content-Type: application/json')
+              mosquitto_pub -h 'mosquitto-mqtts.bda' -t world/$world_id/media/{{inputs.parameters.videoId}} -f status.json
+            end_time=$(date -u +%s)
+            duration=$((end_time - start_time))
+            formatted_duration=$(printf "%d:%02d:%02d" "$((duration / 3600))" "$(((duration % 3600) / 60))" "$((duration % 60))")
+            echo match-features,, $(date +"%Y-%m-%d %H:%M:%S" -ud "@$start_time"), $(date +"%Y-%m-%d %H:%M:%S" -ud "@$end_time"), $formatted_duration >> {{inputs.parameters.pipelineLocation}}/$log_folder/{{inputs.parameters.imagesLocation}}_{{workflow.name}}_times.csv
+        volumeMounts:
+        - name: workdir
+          mountPath: "{{inputs.parameters.workingLocation}}"
+        - name: volumedir
+          mountPath: "{{inputs.parameters.pipelineLocation}}"
+    tolerations:
+    - key: "s3gis.be/pool"
+      operator: "Equal"
+      value: "video-match-cpu"
+      effect: "NoSchedule"
+    nodeSelector:
+      node-type: video-match-cpu
+    synchronization:
+      semaphore:
+        configMapKeyRef:
+          name:  "{{workflow.parameters.worldConfig}}"
+          key: video-match-limit
+    volumes:
+      - name: volumedir
+        persistentVolumeClaim:
+          claimName: "{{inputs.parameters.worldPvc}}"
+    metadata:
+      labels:
+        world: "{{inputs.parameters.worldName}}"
+        workflow: "{{workflow.name}}"
+
+  - name: efs-sync-to-s3
+    inputs:
+        parameters:
+        - name: worldIngestBucket
+        - name: worldPvc
+        - name: worldName
+        - name: imageRepo
+        - name: region
+        - name: pipelineLocation
+        - name: workingLocation
+        - name: version
+        - name: retryCount
+        - name: imagesLocation
+        - name: configFile
+        - name: videoId
+        - name: videoName
+        - name: cpuCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: worker-cores
+        - name: memCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: worker-ram
+    retryStrategy:
+        limit: "{{inputs.parameters.retryCount}}"
+        retryPolicy: OnError
+    podSpecPatch: |
+      containers:
+        - name: main
+          resources:
+            requests:
+              cpu: "{{inputs.parameters.cpuCount}}"
+            # limits:
+            #   memory: "{{inputs.parameters.memCount}}"
+    script:
+        image: "{{inputs.parameters.imageRepo}}/worker:{{inputs.parameters.version}}"
+        command: [bash]
+        source: |
+            set -eo pipefail
+            log_folder=$(jq -r '.logsFolder' {{inputs.parameters.pipelineLocation}}/{{inputs.parameters.configFile}})
+            mkdir -p {{inputs.parameters.pipelineLocation}}/$log_folder
+            exec > >(tee -a {{inputs.parameters.pipelineLocation}}/$log_folder/{{inputs.parameters.imagesLocation}}_{{workflow.name}}_efs_to_s3_sync.log) 2>&1
+
+            start_time=$(date -u +%s)
+              #Sync for ingest and pipeline
+              echo "{{workflow.name}} Syncing EFS Ingest to S3 Ingest:"
+              aws s3 sync --region {{inputs.parameters.region}} --no-progress --no-follow-symlinks {{inputs.parameters.workingLocation}}/ingest/ s3://{{inputs.parameters.worldIngestBucket}}
+
+              world_id=$(curl -s -X 'GET' 'http://bda-tiledb-ws.bda:8080/world' -H 'accept: */*' | jq -r '.[] | select(.name == "{{inputs.parameters.worldName}}") | .id')
+              
+              echo '{ "id": {{inputs.parameters.videoId}}, "status": "Ready", "completedSteps": 12 }' > {{inputs.parameters.videoName}}_ready.json
+
+              echo "Marking video as ready"
+              cat {{inputs.parameters.videoName}}_ready.json
+              response=$(curl -X 'PUT' 'http://bda-tiledb-ws.bda:8080/media/{{inputs.parameters.videoId}}' -w "%{http_code}" -s -o status.json -H 'Content-Type: application/json' -d @{{inputs.parameters.videoName}}_ready.json)
+              if [ "$response" -ne 200 ]; then
+                echo "Source {{inputs.parameters.videoName}} with id {{inputs.parameters.videoId}} had http response code "$response""
+                exit "$response"
+              fi
+
+              mosquitto_pub -h 'mosquitto-mqtts.bda' -t world/$world_id/media/{{inputs.parameters.videoId}} -f status.json
+            end_time=$(date -u +%s)
+
+            duration=$((end_time - start_time))
+            formatted_duration=$(printf "%d:%02d:%02d" "$((duration / 3600))" "$(((duration % 3600) / 60))" "$((duration % 60))")
+            echo efs-sync-to-s3,, $(date +"%Y-%m-%d %H:%M:%S" -ud "@$start_time"), $(date +"%Y-%m-%d %H:%M:%S" -ud "@$end_time"), $formatted_duration >> {{inputs.parameters.pipelineLocation}}/$log_folder/{{inputs.parameters.imagesLocation}}_{{workflow.name}}_times.csv
+        volumeMounts:
+          - name: workdir
+            mountPath: "{{inputs.parameters.workingLocation}}"
+          - name: volumedir
+            mountPath: "{{inputs.parameters.pipelineLocation}}"
+    tolerations:
+    - key: "s3gis.be/pool"
+      operator: "Equal"
+      value: "worker"
+      effect: "NoSchedule"
+    nodeSelector:
+      node-type: worker
+    synchronization:
+      semaphore:
+        configMapKeyRef:
+          name:  "{{workflow.parameters.worldConfig}}"
+          key: sync-push-limit
+    volumes:
+      - name: volumedir
+        persistentVolumeClaim:
+          claimName: "{{inputs.parameters.worldPvc}}"
+    metadata:
+      labels:
+        world: "{{inputs.parameters.worldName}}"
+        workflow: "{{workflow.name}}"
+
+  - name: source-delete
+    inputs:
+      parameters:
+      - name: worldName
+        value: "{{workflow.parameters.worldName}}"
+      - name: imageRepo
+        value: "{{workflow.parameters.imageRepo}}"
+      - name: region
+        value: "{{workflow.parameters.region}}"
+      - name: pipelineLocation
+        value: "{{workflow.parameters.pipelineLocation}}"
+      - name: workingLocation
+        value: "{{workflow.parameters.workingLocation}}"
+      - name: version
+        value: "{{workflow.parameters.version}}"
+      - name: fileName
+        value: "{{workflow.parameters.fileName}}"
+      - name: fileId
+        value: "{{workflow.parameters.fileId}}"
+      - name: configFile
+        value: "{{workflow.parameters.configFile}}"
+      - name: retryCount
+        value: "{{workflow.parameters.retryCount}}"
+      - name: worldPipelineBucket
+        valueFrom:
+          configMapKeyRef:
+            name: "{{workflow.parameters.worldConfig}}"
+            key: pipeline
+      - name: worldIngestBucket
+        valueFrom:
+          configMapKeyRef:
+            name: "{{workflow.parameters.worldConfig}}"
+            key: ingest
+      - name: worldPvc
+        valueFrom:
+          configMapKeyRef:
+            name: "{{workflow.parameters.worldConfig}}"
+            key: pvc
+    dag:
+        tasks:
+        - name: s3-pipe-to-efs
+          template: s3-pipe-to-efs
+          arguments:
+            parameters:
+              [{name: worldPipelineBucket,  value: "{{inputs.parameters.worldPipelineBucket}}"},
+               {name: worldIngestBucket,    value: "{{inputs.parameters.worldIngestBucket}}"},
+               {name: worldPvc,             value: "{{inputs.parameters.worldPvc}}"},
+               {name: worldName,            value: "{{inputs.parameters.worldName}}"},
+               {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+               {name: region,               value: "{{inputs.parameters.region}}"},
+               {name: pipelineLocation,     value: "{{inputs.parameters.pipelineLocation}}"},
+               {name: workingLocation,      value: "{{inputs.parameters.workingLocation}}"},
+               {name: version,              value: "{{inputs.parameters.version}}"},
+               {name: retryCount,           value: "{{inputs.parameters.retryCount}}"},
+               {name: imagesLocation,       value: "{{inputs.parameters.fileName}}"},
+               {name: configFile,           value: "{{workflow.parameters.configFile}}"}]
+        - name: efs-source-delete
+          template: efs-source-delete
+          depends: s3-pipe-to-efs
+          arguments:
+            parameters:
+              [{name: worldPipelineBucket,  value: "{{inputs.parameters.worldPipelineBucket}}"},
+               {name: worldPvc,             value: "{{inputs.parameters.worldPvc}}"},
+               {name: worldName,            value: "{{inputs.parameters.worldName}}"},
+               {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+               {name: region,               value: "{{inputs.parameters.region}}"},
+               {name: pipelineLocation,     value: "{{inputs.parameters.pipelineLocation}}"},
+               {name: version,              value: "{{inputs.parameters.version}}"},
+               {name: retryCount,           value: "{{inputs.parameters.retryCount}}"},
+               {name: fileName,             value: "{{inputs.parameters.fileName}}"},
+               {name: fileId,               value: "{{inputs.parameters.fileId}}"},
+               {name: configFile,           value: "{{workflow.parameters.configFile}}"}]
+        - name: s3-source-delete
+          template: s3-source-delete
+          depends: efs-source-delete
+          arguments:
+            parameters:
+              [{name: worldIngestBucket,    value: "{{inputs.parameters.worldIngestBucket}}"},
+               {name: worldPipelineBucket,  value: "{{inputs.parameters.worldPipelineBucket}}"},
+               {name: worldPvc,             value: "{{inputs.parameters.worldPvc}}"},
+               {name: worldName,            value: "{{inputs.parameters.worldName}}"},
+               {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+               {name: region,               value: "{{inputs.parameters.region}}"},
+               {name: pipelineLocation,     value: "{{inputs.parameters.pipelineLocation}}"},
+               {name: version,              value: "{{inputs.parameters.version}}"},
+               {name: retryCount,           value: "{{inputs.parameters.retryCount}}"},
+               {name: fileName,             value: "{{inputs.parameters.fileName}}"},
+               {name: fileId,               value: "{{inputs.parameters.fileId}}"},
+               {name: configFile,           value: "{{workflow.parameters.configFile}}"}]
+
+  - name: efs-source-delete
+    inputs:
+        parameters:
+        - name: worldPipelineBucket
+        - name: worldPvc
+        - name: worldName
+        - name: imageRepo
+        - name: pipelineLocation
+        - name: version
+        - name: retryCount
+        - name: fileName
+        - name: fileId
+        - name: configFile
+        - name: cpuCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: worker-cores
+        - name: memCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: worker-ram
+    retryStrategy:
+        limit: "{{inputs.parameters.retryCount}}"
+        retryPolicy: OnError
+    podSpecPatch: |
+      containers:
+        - name: main
+          resources:
+            requests:
+              cpu: "{{inputs.parameters.cpuCount}}"
+            # limits:
+            #   memory: "{{inputs.parameters.memCount}}"
+    script:
+        image: "{{inputs.parameters.imageRepo}}/worker:{{inputs.parameters.version}}"
+        command: [bash]
+        source: |
+            set -eo pipefail
+            log_folder=$(jq -r '.logsFolder' {{inputs.parameters.pipelineLocation}}/{{inputs.parameters.configFile}})
+            mkdir -p {{inputs.parameters.pipelineLocation}}/$log_folder
+            exec > >(tee -a {{inputs.parameters.pipelineLocation}}/$log_folder/{{inputs.parameters.fileName}}_{{workflow.name}}_efs_video_deletion.log) 2>&1
+
+            start_time=$(date -u +%s)
+              set -eo pipefail
+              cd {{inputs.parameters.pipelineLocation}}
+
+              world_id=$(curl -s -X 'GET' 'http://bda-tiledb-ws.bda:8080/world' -H 'accept: */*' | jq -r '.[] | select(.name == "{{inputs.parameters.worldName}}") | .id')
+              
+              echo '{ "id": {{inputs.parameters.fileId}}, "status": "Deleting" }' > {{inputs.parameters.fileName}}_deleting.json
+
+              echo "Marking video as ready"
+              response=$(curl -X 'PUT' 'http://bda-tiledb-ws.bda:8080/media/{{inputs.parameters.fileId}}' -w "%{http_code}" -s -o status.json -H 'Content-Type: application/json' -d @{{inputs.parameters.fileName}}_deleting.json)
+              if [ "$response" -ne 200 ]; then
+                echo "Source {{inputs.parameters.fileName}} with id {{inputs.parameters.fileId}} had http response code "$response""
+                exit "$response"
+              fi
+
+              mosquitto_pub -h 'mosquitto-mqtts.bda' -t world/$world_id/media/{{inputs.parameters.fileId}} -f {{inputs.parameters.fileName}}_deleting.json
+              
+              #matches
+              matches_folder=$(jq -r '.matchesFolder' {{inputs.parameters.configFile}})
+              matches_ext=".pkl.gz"
+              if [ -d "$matches_folder" ]; then
+                echo find $matches_folder -type f -name "{{inputs.parameters.fileName}}-*$matches_ext" -print -delete
+                find $matches_folder -type f -name "{{inputs.parameters.fileName}}-*$matches_ext" -print -delete
+              else
+                echo "No $matches_folder folder"
+              fi
+
+              #features
+              features_folder=$(jq -r '.featuresFolder' {{inputs.parameters.configFile}})
+              features_ext=".npz"
+              if [ -d "$features_folder" ]; then
+                echo find $features_folder -type f -name "{{inputs.parameters.fileName}}-*$features_ext" -print -delete
+                find $features_folder -type f -name "{{inputs.parameters.fileName}}-*$features_ext" -print -delete
+              else
+                echo "No $features_folder folder"
+              fi
+              
+              #exif
+              exif_folder=$(jq -r '.exifFolder' {{inputs.parameters.configFile}})
+              exif_ext=".exif"
+              if [ -d "$exif_folder" ]; then
+                echo find $exif_folder -type f -name "{{inputs.parameters.fileName}}-*$exif_ext" -print -delete
+                find $exif_folder -type f -name "{{inputs.parameters.fileName}}-*$exif_ext" -print -delete
+              else
+                echo "No $exif_folder folder"
+              fi
+
+              #masks
+              masks_folder=$(jq -r '.masksFolder' {{inputs.parameters.configFile}})
+              masks_ext=$(jq -r '.MaskSettings.maskExtension' {{inputs.parameters.configFile}})
+              if [ -d "$masks_folder" ]; then
+                echo find $masks_folder -type f -name "{{inputs.parameters.fileName}}-*$masks_ext" -print -delete
+                find $masks_folder -type f -name "{{inputs.parameters.fileName}}-*$masks_ext" -print -delete
+              else
+                echo "No $masks_folder folder"
+              fi
+
+              #segmentations
+              segmentations_folder=$(jq -r '.segmentationsFolder' {{inputs.parameters.configFile}})
+              segmentations_ext=$(jq -r '.MaskSettings.segmentationExtension' {{inputs.parameters.configFile}})
+              if [ -d "$segmentations_folder" ]; then
+                echo find $segmentations_folder -type f -name "{{inputs.parameters.fileName}}-*$segmentations_ext" -print -delete
+                find $segmentations_folder -type f -name "{{inputs.parameters.fileName}}-*$segmentations_ext" -print -delete
+              else
+                echo "No $segmentations_folder folder"
+              fi
+
+              #skymasks
+              skymask_folder=$(jq -r '.MaskSettings.skyMaskFolder' {{inputs.parameters.configFile}})
+              skymask_ext=$(jq -r '.imageFormat' {{inputs.parameters.configFile}})
+              if [ -d "$skymask_folder" ]; then
+                echo find $skymask_folder -type f -name "{{inputs.parameters.fileName}}-*$skymask_ext" -print -delete
+                find $skymask_folder -type f -name "{{inputs.parameters.fileName}}-*$skymask_ext" -print -delete
+              else
+                echo "No $skymask_folder folder"
+              fi
+
+              #globalmasks
+              globalmasks_folder=$(jq -r '.MaskSettings.globalMasksFolder' {{inputs.parameters.configFile}})
+              globalmasks_ext=$(jq -r '.imageFormat' {{inputs.parameters.configFile}})
+              if [ -d "$globalmasks_folder" ]; then
+                echo find $globalmasks_folder -type f -name "{{inputs.parameters.fileName}}*$globalmasks_ext" -print -delete
+                find $globalmasks_folder -type f -name "{{inputs.parameters.fileName}}*$globalmasks_ext" -print -delete
+              else
+                echo "No $globalmasks_folder folder"
+              fi
+
+              #images
+              images_folder=$(jq -r '.imagesFolder' {{inputs.parameters.configFile}})
+              images_ext=$(jq -r '.imageFormat' {{inputs.parameters.configFile}})
+              if [ -d "$images_folder" ]; then
+                echo find $images_folder -type f -name "{{inputs.parameters.fileName}}-*$images_ext" -print -delete
+                find $images_folder -type f -name "{{inputs.parameters.fileName}}-*$images_ext" -print -delete
+              else
+                echo "No $images_folder folder"
+              fi
+
+              #gpx
+              gpx_folder="gpx"
+              gpx_ext=".gpx"
+              if [ -d "$gpx_folder" ]; then
+                echo find $gpx_folder -type f -name "{{inputs.parameters.fileName}}*$gpx_ext" -print -delete
+                find $gpx_folder -type f -name "{{inputs.parameters.fileName}}*$gpx_ext" -print -delete
+                echo find $gpx_folder -type f -name "{{inputs.parameters.fileName}}*.kml" -print -delete
+                find $gpx_folder -type f -name "{{inputs.parameters.fileName}}*.kml" -print -delete
+              else
+                echo "No $gpx_folder folder"
+              fi
+
+              #gpx_zoned
+              gpxzoned_folder=$(jq -r '.gpxutils.outputFolder' {{inputs.parameters.configFile}})
+              gpxzoned_ext=".gpx"
+              if [ -d "$gpxzoned_folder" ]; then
+                echo find $gpxzoned_folder -type f -name "*{{inputs.parameters.fileName}}*$gpxzoned_ext" -print -delete
+                find $gpxzoned_folder -type f -name "*{{inputs.parameters.fileName}}*$gpxzoned_ext" -print -delete
+              else
+                echo "No $gpxzoned_folder folder"
+              fi
+
+              #zone_images
+              zoneimages_folder=$(jq -r '.sliceExifOverrides.out' {{inputs.parameters.configFile}})
+              zoneimages_ext=".csv"
+              if [ -d "$zoneimages_folder" ]; then
+                echo find $zoneimages_folder -type f -name "{{inputs.parameters.fileName}}*$zoneimages_ext" -print -delete
+                find $zoneimages_folder -type f -name "{{inputs.parameters.fileName}}*$zoneimages_ext" -print -delete
+              else
+                echo "No $zoneimages_folder folder"
+              fi
+
+            end_time=$(date -u +%s)
+            duration=$((end_time - start_time))
+            formatted_duration=$(printf "%d:%02d:%02d" "$((duration / 3600))" "$(((duration % 3600) / 60))" "$((duration % 60))")
+            echo video-deletion,, $(date +"%Y-%m-%d %H:%M:%S" -ud "@$start_time"), $(date +"%Y-%m-%d %H:%M:%S" -ud "@$end_time"), $formatted_duration >> {{inputs.parameters.pipelineLocation}}/$log_folder/{{inputs.parameters.fileName}}_{{workflow.name}}_times.csv
+        volumeMounts:
+        - name: volumedir
+          mountPath: "{{inputs.parameters.pipelineLocation}}"
+    tolerations:
+    - key: "s3gis.be/pool"
+      operator: "Equal"
+      value: "worker"
+      effect: "NoSchedule"
+    nodeSelector:
+      node-type: worker
+    synchronization:
+      semaphore:
+        configMapKeyRef:
+          name:  "{{workflow.parameters.worldConfig}}"
+          key: worker-limit
+    volumes:
+      - name: volumedir
+        persistentVolumeClaim:
+          claimName: "{{inputs.parameters.worldPvc}}"
+    metadata:
+      labels:
+        world: "{{inputs.parameters.worldName}}"
+        workflow: "{{workflow.name}}"
+
+  - name: s3-source-delete
+    inputs:
+        parameters:
+        - name: worldIngestBucket
+        - name: worldPipelineBucket
+        - name: worldPvc
+        - name: worldName
+        - name: imageRepo
+        - name: region
+        - name: pipelineLocation
+        - name: version
+        - name: retryCount
+        - name: fileName
+        - name: fileId
+        - name: configFile
+        - name: cpuCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: worker-cores
+        - name: memCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: worker-ram
+    retryStrategy:
+        limit: "{{inputs.parameters.retryCount}}"
+        retryPolicy: OnError
+    podSpecPatch: |
+      containers:
+        - name: main
+          resources:
+            requests:
+              cpu: "{{inputs.parameters.cpuCount}}"
+            # limits:
+            #   memory: "{{inputs.parameters.memCount}}"
+    script:
+        image: "{{inputs.parameters.imageRepo}}/worker:{{inputs.parameters.version}}"
+        command: [bash]
+        source: |
+            set -eo pipefail
+            log_folder=$(jq -r '.logsFolder' {{inputs.parameters.pipelineLocation}}/{{inputs.parameters.configFile}})
+            mkdir -p {{inputs.parameters.pipelineLocation}}/$log_folder
+            exec > >(tee -a {{inputs.parameters.pipelineLocation}}/$log_folder/{{inputs.parameters.fileName}}_{{workflow.name}}_s3_source_delete.log) 2>&1
+
+            start_time=$(date -u +%s)
+              set -eo pipefail
+              # Remove from S3 buckets (video/archive/images from ingest, files from pipeline)
+              videos_folder=$(jq -r '.videosFolder' {{inputs.parameters.pipelineLocation}}/{{inputs.parameters.configFile}})
+              images_folder=$(jq -r '.imagesFolder' {{inputs.parameters.pipelineLocation}}/{{inputs.parameters.configFile}})
+              echo Removing video,archive,images from S3 ingest bucket
+              aws s3 rm --region {{inputs.parameters.region}} s3://{{inputs.parameters.worldIngestBucket}}/archives/ --exclude "*" --include "{{inputs.parameters.fileName}}.*" --recursive
+              aws s3 rm --region {{inputs.parameters.region}} s3://{{inputs.parameters.worldIngestBucket}}/$videos_folder/{{inputs.parameters.fileName}}/ --recursive
+              aws s3 rm --region {{inputs.parameters.region}} s3://{{inputs.parameters.worldIngestBucket}}/$images_folder/{{inputs.parameters.fileName}}/ --recursive
+              echo Removing source files from S3 pipeline bucket
+
+              aws s3 sync --region {{inputs.parameters.region}} --no-progress --delete {{inputs.parameters.pipelineLocation}} s3://{{inputs.parameters.worldPipelineBucket}}
+              
+              echo "Removing source data from DB"
+              file_type=$(curl -s -X 'GET' 'http://bda-tiledb-ws.bda:8080/media/{{inputs.parameters.fileId}}' -H 'accept: */*' | jq -r '.type')
+              echo "Removing $file_type file with id {{inputs.parameters.fileId}}"
+              echo "curl -X 'DELETE' "http://bda-tiledb-ws.bda:8080/media/{{inputs.parameters.fileId}}" -w "%{http_code}" -s -o /dev/null"
+              response=$(curl -X 'DELETE' "http://bda-tiledb-ws.bda:8080/media/{{inputs.parameters.fileId}}" -w "%{http_code}" -s -o /dev/null)
+              if (( response < 200 || response >= 300 )); then
+                echo "$file_type file {{inputs.parameters.fileName}} with id {{inputs.parameters.fileId}} had http response code "$response" while deleting from DB"
+                exit "$response"
+              fi
+              
+              # If the type is zip we also want to remove the video file by the same name
+              if [ "$file_type" == "zip" ]; then
+                file_id=$(curl -s -X 'GET' 'http://bda-tiledb-ws.bda:8080/media' -H 'accept: */*' | jq -r '.[] | select(.name == "{{inputs.parameters.fileName}}" and .type == "360" and .world.name == "{{inputs.parameters.worldName}}") | .id')
+                if [ -n "$file_id" ]; then
+                  echo "Removing video file with id $file_id"
+                  echo "curl -X 'DELETE' "http://bda-tiledb-ws.bda:8080/media/$file_id" -w "%{http_code}" -s -o /dev/null"
+                  response=$(curl -X 'DELETE' "http://bda-tiledb-ws.bda:8080/media/$file_id" -w "%{http_code}" -s -o /dev/null)
+                  if (( response < 200 || response >= 300 )); then
+                    echo "Video {{inputs.parameters.fileName}} with id $file_id had http response code "$response" while deleting from DB"
+                    exit "$response"
+                  fi
+                else
+                  echo "No video file named {{inputs.parameters.fileName}} was found in DB for world {{inputs.parameters.worldName}}"
+                fi
+              fi
+
+              # Notifying via MQTT
+              world_id=$(curl -s -X 'GET' 'http://bda-tiledb-ws.bda:8080/world' -H 'accept: */*' | jq -r '.[] | select(.name == "{{inputs.parameters.worldName}}") | .id')
+              echo '{ "id": {{inputs.parameters.fileId}}, "status": "Deleted" }' > {{inputs.parameters.fileName}}_deleted.json
+              mosquitto_pub -h 'mosquitto-mqtts.bda' -t world/$world_id/media/{{inputs.parameters.fileId}} -f {{inputs.parameters.fileName}}_deleted.json
+
+            end_time=$(date -u +%s)
+            duration=$((end_time - start_time))
+            formatted_duration=$(printf "%d:%02d:%02d" "$((duration / 3600))" "$(((duration % 3600) / 60))" "$((duration % 60))")
+            echo s3-video-delete,, $(date +"%Y-%m-%d %H:%M:%S" -ud "@$start_time"), $(date +"%Y-%m-%d %H:%M:%S" -ud "@$end_time"), $formatted_duration >> {{inputs.parameters.pipelineLocation}}/$log_folder/{{inputs.parameters.fileName}}_{{workflow.name}}_times.csv
+        volumeMounts:
+        - name: volumedir
+          mountPath: "{{inputs.parameters.pipelineLocation}}"
+    tolerations:
+    - key: "s3gis.be/pool"
+      operator: "Equal"
+      value: "worker"
+      effect: "NoSchedule"
+    nodeSelector:
+      node-type: worker
+    synchronization:
+      semaphore:
+        configMapKeyRef:
+          name:  "{{workflow.parameters.worldConfig}}"
+          key: sync-push-limit
+    volumes:
+      - name: volumedir
+        persistentVolumeClaim:
+          claimName: "{{inputs.parameters.worldPvc}}"
+    metadata:
+      labels:
+        world: "{{inputs.parameters.worldName}}"
+        workflow: "{{workflow.name}}"
+
+  - name: db-exit-failure
+    inputs:
+        parameters:
+        - name: imageRepo
+        - name: worldName
+        - name: pipelineLocation
+        - name: version
+        - name: retryCount
+        - name: fileName
+        - name: fileId
+        - name: configFile
+        - name: cpuCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: worker-cores
+        - name: memCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: worker-ram
+        - name: worldPvc
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: pvc
+    retryStrategy:
+        limit: "{{inputs.parameters.retryCount}}"
+        retryPolicy: OnError
+    podSpecPatch: |
+      containers:
+        - name: main
+          resources:
+            requests:
+              cpu: "{{inputs.parameters.cpuCount}}"
+            # limits:
+            #   memory: "{{inputs.parameters.memCount}}"
+    script:
+        image: "{{inputs.parameters.imageRepo}}/worker:{{inputs.parameters.version}}"
+        command: [bash]
+        source: |
+            set -eo pipefail
+            log_folder=$(jq -r '.logsFolder' {{inputs.parameters.pipelineLocation}}/{{inputs.parameters.configFile}})
+            mkdir -p {{inputs.parameters.pipelineLocation}}/$log_folder
+            exec > >(tee -a {{inputs.parameters.pipelineLocation}}/$log_folder/{{inputs.parameters.fileName}}_{{workflow.name}}_exit_handler.log) 2>&1
+
+            start_time=$(date -u +%s)
+              set -eo pipefail
+              cd {{inputs.parameters.pipelineLocation}}
+
+              world_id=$(curl -s -X 'GET' 'http://bda-tiledb-ws.bda:8080/world' -H 'accept: */*' | jq -r '.[] | select(.name == "{{inputs.parameters.worldName}}") | .id')
+              
+              echo '{ "id": {{inputs.parameters.fileId}}, "status": "Failed" }' > {{inputs.parameters.fileName}}_failure.json
+
+              echo "!!!! Media Ingest Failed !!!!"
+              response=$(curl -X 'PUT' 'http://bda-tiledb-ws.bda:8080/media/{{inputs.parameters.fileId}}' -w "%{http_code}" -s -o status.json -H 'Content-Type: application/json' -d @{{inputs.parameters.fileName}}_failure.json)
+              if [ "$response" -ne 200 ]; then
+                echo "Source {{inputs.parameters.fileName}} with id {{inputs.parameters.fileId}} had http response code "$response""
+                exit "$response"
+              fi
+
+              mosquitto_pub -h 'mosquitto-mqtts.bda' -t world/$world_id/media/{{inputs.parameters.fileId}} -f {{inputs.parameters.fileName}}_failure.json
+
+            end_time=$(date -u +%s)
+            duration=$((end_time - start_time))
+            formatted_duration=$(printf "%d:%02d:%02d" "$((duration / 3600))" "$(((duration % 3600) / 60))" "$((duration % 60))")
+            echo db-exit-failure,, $(date +"%Y-%m-%d %H:%M:%S" -ud "@$start_time"), $(date +"%Y-%m-%d %H:%M:%S" -ud "@$end_time"), $formatted_duration >> {{inputs.parameters.pipelineLocation}}/$log_folder/{{inputs.parameters.fileName}}_{{workflow.name}}_times.csv
+        volumeMounts:
+        - name: volumedir
+          mountPath: "{{inputs.parameters.pipelineLocation}}"
+    tolerations:
+    - key: "s3gis.be/pool"
+      operator: "Equal"
+      value: "worker"
+      effect: "NoSchedule"
+    nodeSelector:
+      node-type: worker
+    synchronization:
+      semaphore:
+        configMapKeyRef:
+          name:  "{{workflow.parameters.worldConfig}}"
+          key: worker-limit
+    volumes:
+      - name: volumedir
+        persistentVolumeClaim:
+          claimName: "{{inputs.parameters.worldPvc}}"
+    metadata:
+      labels:
+        world: "{{inputs.parameters.worldName}}"
+        workflow: "{{workflow.name}}"
+
+  - name: exit-handler
+    steps:
+    - - name: db-exit-failure
+        template: db-exit-failure
+        when: "{{workflow.status}} != Succeeded"
+        arguments:
+          parameters:
+            [ {name: imageRepo,            value: "{{workflow.parameters.imageRepo}}"},
+              {name: worldName,            value: "{{workflow.parameters.worldName}}"},
+              {name: version,              value: "{{workflow.parameters.version}}"},
+              {name: pipelineLocation,     value: "{{workflow.parameters.pipelineLocation}}"},
+              {name: retryCount,           value: "{{workflow.parameters.retryCount}}"},
+              {name: fileName,             value: "{{workflow.parameters.fileName}}"},
+              {name: configFile,           value: "{{workflow.parameters.configFile}}"},
+              {name: fileId,               value: "{{workflow.parameters.fileId}}"} ]
+    - - name: exit-sync-logs
+        template: exit-sync-logs
+        arguments:
+          parameters:
+            [ {name: pipelineLocation,     value: "{{workflow.parameters.pipelineLocation}}"},
+              {name: worldName,            value: "{{workflow.parameters.worldName}}"},
+              {name: configFile,           value: "{{workflow.parameters.configFile}}"},
+              {name: region,               value: "{{workflow.parameters.region}}"},
+              {name: fileName,             value: "{{workflow.parameters.fileName}}"}]
+    
+  - name: exit-sync-logs
+    inputs:
+        parameters:
+        - name: pipelineLocation
+        - name: worldName
+        - name: fileName
+        - name: configFile
+        - name: region
+        - name: worldPipelineBucket
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: pipeline
+        - name: worldPvc
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: pvc
+        - name: cpuCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: worker-cores
+        - name: memCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: worker-ram
+    podSpecPatch: |
+      containers:
+        - name: main
+          resources:
+            requests:
+              cpu: "{{inputs.parameters.cpuCount}}"
+            # limits:
+            #   memory: "{{inputs.parameters.memCount}}"
+    script:
+        #image: bitnami/kubectl:latest
+        image: bitnami/aws-cli:latest
+        command: [bash]
+        source: |
+            set -eo pipefail
+            log_line=$(grep '"logsFolder"' {{inputs.parameters.pipelineLocation}}/{{inputs.parameters.configFile}})
+            log_folder=$(echo "$log_line" | awk -F'"' '{print $4}')
+            mkdir -p {{inputs.parameters.pipelineLocation}}/$log_folder
+            start_time=$(date -ud "{{workflow.creationTimestamp}}" +%s)
+            duration_sec=$(echo "{{workflow.duration}}" | awk -F'.' '{print $1}')
+            formatted_duration=$(printf "%d:%02d:%02d" "$((duration_sec / 3600))" "$(((duration_sec % 3600) / 60))" "$((duration_sec % 60))")
+            echo {{workflow.name}},, $(date +"%Y-%m-%d %H:%M:%S" -ud "@$start_time"), $(date +"%Y-%m-%d %H:%M:%S" -ud "@$((start_time + duration_sec))"), $formatted_duration >> {{inputs.parameters.pipelineLocation}}/$log_folder/{{inputs.parameters.fileName}}_{{workflow.name}}_times.csv
+            aws s3 sync --region {{inputs.parameters.region}} --no-progress {{inputs.parameters.pipelineLocation}}/$log_folder/ s3://{{inputs.parameters.worldPipelineBucket}}/$log_folder/
+        volumeMounts:
+        - name: volumedir
+          mountPath: "{{inputs.parameters.pipelineLocation}}"
+    tolerations:
+    - key: "s3gis.be/pool"
+      operator: "Equal"
+      value: "worker"
+      effect: "NoSchedule"
+    nodeSelector:
+      node-type: worker
+    volumes:
+      - name: volumedir
+        persistentVolumeClaim:
+          claimName: "{{inputs.parameters.worldPvc}}"
+    metadata:
+      labels:
+        world: "{{inputs.parameters.worldName}}"
+        workflow: "{{workflow.name}}"

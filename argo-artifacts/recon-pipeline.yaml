@@ -1,43 +1,3241 @@
 apiVersion: argoproj.io/v1alpha1
-kind: WorkflowTemplate
+#kind: WorkflowTemplate
+kind: Workflow
 metadata:
-  name: world-pipeline
-  namespace: argo
+  #name: recon-pipeline
+  generateName: recon-pipeline-
+  labels:
+    world: default
   annotations:
     workflows.argoproj.io/description: |
-      templates for world creation and destruction
-      must be run with service account that has access to storageclasses and persistentvolumeclaims
-      add '--serviceaccount argo-infra' to run workflow
-    workflows.argoproj.io/maintainer: '@eredd.carr@reded.com'
-    workflows.argoproj.io/tags: world
+      templates for processing zones into tiles
+      reconName should have a unique identifier
+    workflows.argoproj.io/maintainer: '@kip.carr@unity3d.com'
+    workflows.argoproj.io/tags: recon
 spec:
-  entrypoint: world-create
+  entrypoint: recon-alignment-process
   onExit: exit-handler
+  workflowMetadata:
+    labels:
+      world: "{{workflow.parameters.worldName}}"
 
   arguments:
     parameters:
-      - name: cluster
+      - name: worldConfig
+      - name: worldName
+      - name: imageRepo
       - name: region
         value: "us-east-1"
-      - name: imageRepo
-      - name: worldName
-      - name: worldId
+      - name: volumeLocation
+        value: "/data"
+      - name: workingLocation
+        value: "/working"
       - name: logLocation
         value: "logs"
       - name: version
-        value: "2.1.36"  
+        value: "2.1.36"
+      - name: reconName
+      - name: reconId
+      - name: configFile
       - name: retryCount
         value: 2
-      - name: worldInfoLocation
+
+  volumeClaimTemplates:
+  - metadata:
+      name: workdir
+    spec:
+      accessModes: [ "ReadWriteMany" ]
+      storageClassName: efs-sc
+      resources:
+        requests:
+          storage: 50Gi
 
   templates:
-    - name: world-create
-      steps:
-        - - name: create-world
-            template: create-world
+  - name: recon-process-all
+    inputs:
+      parameters:
+      - name: worldName
+        value: "{{workflow.parameters.worldName}}"
+      - name: imageRepo
+        value: "{{workflow.parameters.imageRepo}}"
+      - name: region
+        value: "{{workflow.parameters.region}}"
+      - name: volumeLocation
+        value: "{{workflow.parameters.volumeLocation}}"
+      - name: workingLocation
+        value: "{{workflow.parameters.workingLocation}}"
+      - name: logLocation
+        value: "{{workflow.parameters.logLocation}}"
+      - name: version
+        value: "{{workflow.parameters.version}}"
+      - name: reconName
+        value: "{{workflow.parameters.reconName}}"
+      - name: configFile
+        value: "{{workflow.parameters.configFile}}"
+      - name: retryCount
+        value: "{{workflow.parameters.retryCount}}"
+      - name: worldPipelineBucket
+        valueFrom:
+          configMapKeyRef:
+            name: "{{workflow.parameters.worldConfig}}"
+            key: pipeline
+      - name: worldTempBucket
+        valueFrom:
+          configMapKeyRef:
+            name: "{{workflow.parameters.worldConfig}}"
+            key: temp
+      - name: worldTileBucket
+        valueFrom:
+          configMapKeyRef:
+            name: "{{workflow.parameters.worldConfig}}"
+            key: tile
+      - name: worldPvc
+        valueFrom:
+          configMapKeyRef:
+            name: "{{workflow.parameters.worldConfig}}"
+            key: pvc
+    dag:
+        tasks:
+        - name: setup-for-all-zones
+          template: setup-for-all-zones
+          arguments:
+            parameters:
+              [{name: worldPipelineBucket,  value: "{{inputs.parameters.worldPipelineBucket}}"},
+               {name: worldTempBucket,      value: "{{inputs.parameters.worldTempBucket}}"},
+               {name: worldName,            value: "{{inputs.parameters.worldName}}"},
+               {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+               {name: region,               value: "{{inputs.parameters.region}}"},
+               {name: workingLocation,      value: "{{inputs.parameters.workingLocation}}"},
+               {name: logLocation,          value: "{{inputs.parameters.logLocation}}"},
+               {name: version,              value: "{{inputs.parameters.version}}"},
+               {name: reconName,            value: "{{inputs.parameters.reconName}}"},
+               {name: configFile,           value: "{{inputs.parameters.configFile}}"},
+               {name: retryCount,           value: "{{inputs.parameters.retryCount}}"}]
+        - name: recon-process
+          template: recon-process
+          depends: setup-for-all-zones
 
-    - name: create-world
-      container:
-        image: "{{workflow.parameters.imageRepo}}:{{workflow.parameters.version}}"
-        command: ["/bin/bash"]
-        args: ["-c", "echo Creating world..."]
+  - name: recon-process-all-align
+    inputs:
+      parameters:
+      - name: worldName
+        value: "{{workflow.parameters.worldName}}"
+      - name: imageRepo
+        value: "{{workflow.parameters.imageRepo}}"
+      - name: region
+        value: "{{workflow.parameters.region}}"
+      - name: volumeLocation
+        value: "{{workflow.parameters.volumeLocation}}"
+      - name: workingLocation
+        value: "{{workflow.parameters.workingLocation}}"
+      - name: logLocation
+        value: "{{workflow.parameters.logLocation}}"
+      - name: version
+        value: "{{workflow.parameters.version}}"
+      - name: reconName
+        value: "{{workflow.parameters.reconName}}"
+      - name: reconId
+        value: "{{workflow.parameters.reconId}}"
+      - name: configFile
+        value: "{{workflow.parameters.configFile}}"
+      - name: retryCount
+        value: "{{workflow.parameters.retryCount}}"
+      - name: worldPipelineBucket
+        valueFrom:
+          configMapKeyRef:
+            name: "{{workflow.parameters.worldConfig}}"
+            key: pipeline
+      - name: worldTempBucket
+        valueFrom:
+          configMapKeyRef:
+            name: "{{workflow.parameters.worldConfig}}"
+            key: temp
+      - name: worldTileBucket
+        valueFrom:
+          configMapKeyRef:
+            name: "{{workflow.parameters.worldConfig}}"
+            key: tile
+      - name: worldPvc
+        valueFrom:
+          configMapKeyRef:
+            name: "{{workflow.parameters.worldConfig}}"
+            key: pvc
+    dag:
+        tasks:
+        - name: setup-for-all-zones
+          template: setup-for-all-zones
+          arguments:
+            parameters:
+              [{name: worldPipelineBucket,  value: "{{inputs.parameters.worldPipelineBucket}}"},
+               {name: worldTempBucket,      value: "{{inputs.parameters.worldTempBucket}}"},
+               {name: worldName,            value: "{{inputs.parameters.worldName}}"},
+               {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+               {name: region,               value: "{{inputs.parameters.region}}"},
+               {name: workingLocation,      value: "{{inputs.parameters.workingLocation}}"},
+               {name: logLocation,          value: "{{inputs.parameters.logLocation}}"},
+               {name: version,              value: "{{inputs.parameters.version}}"},
+               {name: reconName,            value: "{{inputs.parameters.reconName}}"},
+               {name: configFile,           value: "{{inputs.parameters.configFile}}"},
+               {name: retryCount,           value: "{{inputs.parameters.retryCount}}"}]
+        - name: recon-alignment-process
+          template: recon-alignment-process
+          depends: setup-for-all-zones
+
+  - name: update-recon-db
+    inputs:
+        parameters:
+        - name: worldName
+        - name: worldPvc
+        - name: imageRepo
+        - name: volumeLocation
+        - name: workingLocation
+        - name: logLocation
+        - name: version
+        - name: retryCount
+        - name: reconName
+        - name: reconId
+        - name: configFile
+        - name: cpuCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: worker-cores
+        - name: memCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: worker-ram
+    retryStrategy:
+        limit: "{{inputs.parameters.retryCount}}"
+        retryPolicy: OnError
+    podSpecPatch: |
+      containers:
+        - name: main
+          resources:
+            requests:
+              cpu: "{{inputs.parameters.cpuCount}}"
+            # limits:
+            #   memory: "{{inputs.parameters.memCount}}"
+    script:
+        image: "{{inputs.parameters.imageRepo}}/worker:{{inputs.parameters.version}}"
+        command: [bash]
+        source: |
+          set -eo pipefail
+          mkdir -p {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/{{inputs.parameters.logLocation}}
+          exec > >(tee -a {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/{{inputs.parameters.logLocation}}/{{workflow.name}}_update_recon_db.log) 2>&1
+
+          generate-json() {
+            echo '{
+              "name": "{{inputs.parameters.reconName}}",
+              "id": {{inputs.parameters.reconId}},
+              "world": '$1',
+              "creation": "{{workflow.creationTimestamp}}",
+              "wfid": "{{workflow.name}}",
+              "status": "Building",
+              "totalSteps": 8,
+              "completedSteps": 1
+          }' | tee {{inputs.parameters.reconName}}.json
+          }
+
+          start_time=$(date -u +%s)
+            set -eo pipefail
+            world_id=$(curl -s -X 'GET' 'http://bda-tiledb-ws.bda:8080/world' -H 'accept: */*' | jq -r '.[] | select(.name == "{{inputs.parameters.worldName}}") | .id')
+            
+            echo "Create reconstruction record"
+            generate-json $world_id
+            
+            echo "Putting recon data to DB"
+            response=$(curl -X 'PUT' 'http://bda-tiledb-ws.bda:8080/reconstruction/{{inputs.parameters.reconId}}' -w "%{http_code}" -s -o status.json -H 'Content-Type: application/json' -d @{{inputs.parameters.reconName}}.json)
+            if [ "$response" -ne 200 ]; then
+              echo "Reconstruction {{inputs.parameters.reconName}} with id {{inputs.parameters.reconId}} had http response code "$response""
+              exit "$response"
+            fi
+
+            step=$(jq '{id,name,world,status,creation,wfid,completedSteps,totalSteps} + {"currentStep": "update-recon-db"}' {{inputs.parameters.reconName}}.json)
+            mosquitto_pub -h 'mosquitto-mqtts.bda' -t world/$world_id/reconstruction/{{inputs.parameters.reconId}} -m "$step"
+          end_time=$(date -u +%s)
+          duration=$((end_time - start_time))
+          formatted_duration=$(printf "%d:%02d:%02d" "$((duration / 3600))" "$(((duration % 3600) / 60))" "$((duration % 60))")
+          echo update-recon-db,, $(date +"%Y-%m-%d %H:%M:%S" -ud "@$start_time"), $(date +"%Y-%m-%d %H:%M:%S" -ud "@$end_time"), $formatted_duration >> {{inputs.parameters.volumeLocation}}/$log_folder/{{inputs.parameters.reconName}}_{{workflow.name}}_times.csv
+        volumeMounts:
+        - name: workdir
+          mountPath: "{{inputs.parameters.workingLocation}}"
+        - name: volumedir
+          mountPath: "{{inputs.parameters.volumeLocation}}"
+    tolerations:
+    - key: "s3gis.be/pool"
+      operator: "Equal"
+      value: "worker"
+      effect: "NoSchedule"
+    nodeSelector:
+      node-type: worker
+    synchronization:
+      semaphore:
+        configMapKeyRef:
+          name:  "{{workflow.parameters.worldConfig}}"
+          key: worker-limit
+    volumes:
+      - name: volumedir
+        persistentVolumeClaim:
+          claimName: "{{inputs.parameters.worldPvc}}"
+    metadata:
+      labels:
+        world: "{{inputs.parameters.worldName}}"
+        workflow: "{{workflow.name}}"
+  
+  - name: setup-for-all-zones
+    inputs:
+        parameters:
+        - name: worldPipelineBucket
+        - name: worldTempBucket
+        - name: worldName
+        - name: imageRepo
+        - name: region
+        - name: workingLocation
+        - name: logLocation
+        - name: version
+        - name: reconName
+        - name: retryCount
+        - name: configFile
+        - name: cpuCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: worker-cores
+        - name: memCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: worker-ram
+    retryStrategy:
+      limit: "{{inputs.parameters.retryCount}}"
+      retryPolicy: OnError
+    podSpecPatch: |
+      containers:
+        - name: main
+          resources:
+            requests:
+              cpu: "{{inputs.parameters.cpuCount}}"
+            # limits:
+            #   memory: "{{inputs.parameters.memCount}}"
+    script:
+        image: "{{inputs.parameters.imageRepo}}/worker:{{inputs.parameters.version}}"
+        command: [bash]
+        source: | 
+            set -eo pipefail
+            mkdir -p {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/{{inputs.parameters.logLocation}}
+            exec > >(tee -a {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/{{inputs.parameters.logLocation}}/{{workflow.name}}_setup_for_all_zones.log) 2>&1
+            
+            start_time=$(date -u +%s)
+              echo "Syncing Pipeline config for zone folder" 
+              aws s3 cp --region {{inputs.parameters.region}} --no-progress s3://{{inputs.parameters.worldPipelineBucket}}/{{inputs.parameters.configFile}} {{inputs.parameters.workingLocation}}/temp/{{inputs.parameters.configFile}}
+              
+              zone_folder=$(jq -r '.sliceExifOverrides.out' {{inputs.parameters.workingLocation}}/temp/{{inputs.parameters.configFile}})
+              # sync all tiles for processing
+              echo "{{workflow.name}} syncing S3 Pipeline Zones to S3 Working for {{inputs.parameters.reconName}}:"
+              aws s3 sync --region {{inputs.parameters.region}} --no-progress s3://{{inputs.parameters.worldPipelineBucket}}/$zone_folder s3://{{inputs.parameters.worldTempBucket}}/{{inputs.parameters.reconName}}/$zone_folder
+            end_time=$(date -u +%s)
+            duration=$((end_time - start_time))
+            formatted_duration=$(printf "%d:%02d:%02d" "$((duration / 3600))" "$(((duration % 3600) / 60))" "$((duration % 60))")
+            echo setup-for-all-zones,, $(date +"%Y-%m-%d %H:%M:%S" -ud "@$start_time"), $(date +"%Y-%m-%d %H:%M:%S" -ud "@$end_time"), $formatted_duration >> {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/{{inputs.parameters.logLocation}}/{{workflow.name}}_times.csv
+        volumeMounts:
+        - name: workdir
+          mountPath: "{{inputs.parameters.workingLocation}}"
+    tolerations:
+    - key: "s3gis.be/pool"
+      operator: "Equal"
+      value: "worker"
+      effect: "NoSchedule"
+    nodeSelector:
+      node-type: worker
+    synchronization:
+      semaphore:
+        configMapKeyRef:
+          name:  "{{workflow.parameters.worldConfig}}"
+          key: worker-limit
+    metadata:
+      labels:
+        world: "{{inputs.parameters.worldName}}"
+        workflow: "{{workflow.name}}"
+
+  - name: recon-process
+    inputs:
+      parameters:
+      - name: worldName
+        value: "{{workflow.parameters.worldName}}"
+      - name: imageRepo
+        value: "{{workflow.parameters.imageRepo}}"
+      - name: region
+        value: "{{workflow.parameters.region}}"
+      - name: volumeLocation
+        value: "{{workflow.parameters.volumeLocation}}"
+      - name: workingLocation
+        value: "{{workflow.parameters.workingLocation}}"
+      - name: logLocation
+        value: "{{workflow.parameters.logLocation}}"
+      - name: version
+        value: "{{workflow.parameters.version}}"
+      - name: reconName
+        value: "{{workflow.parameters.reconName}}"
+      - name: reconId
+        value: "{{workflow.parameters.reconId}}"
+      - name: configFile
+        value: "{{workflow.parameters.configFile}}"
+      - name: retryCount
+        value: "{{workflow.parameters.retryCount}}"
+      - name: worldPipelineBucket
+        valueFrom:
+          configMapKeyRef:
+            name: "{{workflow.parameters.worldConfig}}"
+            key: pipeline
+      - name: worldTempBucket
+        valueFrom:
+          configMapKeyRef:
+            name: "{{workflow.parameters.worldConfig}}"
+            key: temp
+      - name: worldTileBucket
+        valueFrom:
+          configMapKeyRef:
+            name: "{{workflow.parameters.worldConfig}}"
+            key: tile
+      - name: worldPvc
+        valueFrom:
+          configMapKeyRef:
+            name: "{{workflow.parameters.worldConfig}}"
+            key: pvc
+    dag:
+        tasks:
+        - name: update-recon-db
+          template: update-recon-db
+          arguments:
+            parameters:
+              [{name: worldName,            value: "{{inputs.parameters.worldName}}"},
+               {name: worldPvc,             value: "{{inputs.parameters.worldPvc}}"},
+               {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+               {name: volumeLocation,       value: "{{inputs.parameters.volumeLocation}}"},
+               {name: workingLocation,      value: "{{inputs.parameters.workingLocation}}"},
+               {name: logLocation,          value: "{{inputs.parameters.logLocation}}"},
+               {name: version,              value: "{{inputs.parameters.version}}"},
+               {name: reconName,            value: "{{inputs.parameters.reconName}}"},
+               {name: reconId,              value: "{{inputs.parameters.reconId}}"},
+               {name: configFile,           value: "{{inputs.parameters.configFile}}"},
+               {name: retryCount,           value: "{{inputs.parameters.retryCount}}"}]
+        - name: s3-temp-to-efs
+          template: s3-temp-to-efs
+          depends: update-recon-db
+          arguments:
+            parameters:
+              [{name: worldPipelineBucket,  value: "{{inputs.parameters.worldPipelineBucket}}"},
+               {name: worldTempBucket,      value: "{{inputs.parameters.worldTempBucket}}"},
+               {name: worldPvc,             value: "{{inputs.parameters.worldPvc}}"},
+               {name: worldName,            value: "{{inputs.parameters.worldName}}"},
+               {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+               {name: region,               value: "{{inputs.parameters.region}}"},
+               {name: volumeLocation,       value: "{{inputs.parameters.volumeLocation}}"},
+               {name: workingLocation,      value: "{{inputs.parameters.workingLocation}}"},
+               {name: logLocation,          value: "{{inputs.parameters.logLocation}}"},
+               {name: version,              value: "{{inputs.parameters.version}}"},
+               {name: reconName,            value: "{{inputs.parameters.reconName}}"},
+               {name: reconId,              value: "{{inputs.parameters.reconId}}"},
+               {name: configFile,           value: "{{inputs.parameters.configFile}}"},
+               {name: retryCount,           value: "{{inputs.parameters.retryCount}}"}]
+        - name: plan-projects
+          template: plan-projects
+          depends: s3-temp-to-efs
+          arguments:
+            parameters:
+              [{name: worldName,            value: "{{inputs.parameters.worldName}}"},
+               {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+               {name: volumeLocation,       value: "{{inputs.parameters.volumeLocation}}"},
+               {name: workingLocation,      value: "{{inputs.parameters.workingLocation}}"},
+               {name: logLocation,          value: "{{inputs.parameters.logLocation}}"},
+               {name: version,              value: "{{inputs.parameters.version}}"},
+               {name: reconName,            value: "{{inputs.parameters.reconName}}"},
+               {name: reconId,              value: "{{inputs.parameters.reconId}}"},
+               {name: configFile,           value: "{{inputs.parameters.configFile}}"},
+               {name: retryCount,           value: "{{inputs.parameters.retryCount}}"}]
+        - name: build-projects
+          template: build-projects
+          depends: plan-projects
+          arguments:
+            parameters:
+              [{name: worldPvc,             value: "{{inputs.parameters.worldPvc}}"},
+               {name: worldName,            value: "{{inputs.parameters.worldName}}"},
+               {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+               {name: volumeLocation,       value: "{{inputs.parameters.volumeLocation}}"},
+               {name: workingLocation,      value: "{{inputs.parameters.workingLocation}}"},
+               {name: logLocation,          value: "{{inputs.parameters.logLocation}}"},
+               {name: version,              value: "{{inputs.parameters.version}}"},
+               {name: reconName,            value: "{{inputs.parameters.reconName}}"},
+               {name: reconId,              value: "{{inputs.parameters.reconId}}"},
+               {name: configFile,           value: "{{inputs.parameters.configFile}}"},
+               {name: retryCount,           value: "{{inputs.parameters.retryCount}}"}]
+        - name: reconstruction
+          template: reconstruction
+          depends: build-projects
+          #onExit: recon-exit-handler
+          arguments:
+            parameters:
+              [{name: worldPipelineBucket,  value: "{{inputs.parameters.worldPipelineBucket}}"},
+               {name: worldTempBucket,      value: "{{inputs.parameters.worldTempBucket}}"},
+               {name: worldTileBucket,      value: "{{inputs.parameters.worldTileBucket}}"},
+               {name: worldPvc,             value: "{{inputs.parameters.worldPvc}}"},
+               {name: worldName,            value: "{{inputs.parameters.worldName}}"},
+               {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+               {name: region,               value: "{{inputs.parameters.region}}"},
+               {name: volumeLocation,       value: "{{inputs.parameters.volumeLocation}}"},
+               {name: workingLocation,      value: "{{inputs.parameters.workingLocation}}"},
+               {name: logLocation,          value: "{{inputs.parameters.logLocation}}"},
+               {name: version,              value: "{{inputs.parameters.version}}"},
+               {name: reconName,            value: "{{inputs.parameters.reconName}}"},
+               {name: configFile,           value: "{{inputs.parameters.configFile}}"},
+               {name: retryCount,           value: "{{inputs.parameters.retryCount}}"},
+               {name: project,              value: "{{item}}"}]
+          withParam: "{{tasks.build-projects.outputs.parameters.projects}}"
+        - name: recon-tilesets
+          template: join-tilesets
+          depends: reconstruction || reconstruction.Failed
+          #depends: build-projects
+          arguments:
+            parameters:
+              [{name: worldPvc,             value: "{{inputs.parameters.worldPvc}}"},
+               {name: worldName,            value: "{{inputs.parameters.worldName}}"},
+               {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+               {name: volumeLocation,       value: "{{inputs.parameters.volumeLocation}}"},
+               {name: workingLocation,      value: "{{inputs.parameters.workingLocation}}"},
+               {name: version,              value: "{{inputs.parameters.version}}"},
+               {name: reconName,            value: "{{inputs.parameters.reconName}}"},
+               {name: reconId,              value: "{{inputs.parameters.reconId}}"},
+               {name: configFile,           value: "{{inputs.parameters.configFile}}"},
+               {name: retryCount,           value: "{{inputs.parameters.retryCount}}"},
+               {name: tilesFolder,          value: "{{tasks.build-projects.outputs.parameters.project_folder}}"},
+               {name: tilesetName,          value: "tileset.json"},
+               {name: joinedTilesetName,    value: "recon_tileset.json"},
+               {name: taskName,             value: "recon-tilesets"}]
+        - name: increment-step-recon-join
+          template: increment-step
+          depends: recon-tilesets
+          arguments:
+            parameters:
+              [{name: worldPvc,             value: "{{inputs.parameters.worldPvc}}"},
+               {name: worldName,            value: "{{inputs.parameters.worldName}}"},
+               {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+               {name: logLocation,          value: "{{inputs.parameters.logLocation}}"},
+               {name: volumeLocation,       value: "{{inputs.parameters.volumeLocation}}"},
+               {name: workingLocation,      value: "{{inputs.parameters.workingLocation}}"},
+               {name: version,              value: "{{inputs.parameters.version}}"},
+               {name: reconName,            value: "{{inputs.parameters.reconName}}"},
+               {name: reconId,              value: "{{inputs.parameters.reconId}}"},
+               {name: configFile,           value: "{{inputs.parameters.configFile}}"},
+               {name: retryCount,           value: "{{inputs.parameters.retryCount}}"},
+               {name: taskName,             value: "increment-step-recon-join"}]
+        - name: world-tileset
+          template: join-tilesets
+          depends: reconstruction || reconstruction.Failed
+          arguments:
+            parameters:
+              [{name: worldPvc,             value: "{{inputs.parameters.worldPvc}}"},
+               {name: worldName,            value: "{{inputs.parameters.worldName}}"},
+               {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+               {name: volumeLocation,       value: "{{inputs.parameters.volumeLocation}}"},
+               {name: workingLocation,      value: "{{inputs.parameters.workingLocation}}"},
+               {name: version,              value: "{{inputs.parameters.version}}"},
+               {name: reconName,            value: "{{inputs.parameters.reconName}}"},
+               {name: reconId,              value: "{{inputs.parameters.reconId}}"},
+               {name: configFile,           value: "{{inputs.parameters.configFile}}"},
+               {name: retryCount,           value: "{{inputs.parameters.retryCount}}"},
+               {name: tilesFolder,          value: "{{tasks.build-projects.outputs.parameters.tiles_folder}}"},
+               {name: tilesetName,          value: "tileset.json"},
+               {name: joinedTilesetName,    value: "recon_tileset.json"},
+               {name: taskName,             value: "world-tileset"}]
+        - name: increment-step-world-join
+          template: increment-step
+          depends: world-tileset
+          arguments:
+            parameters:
+              [{name: worldPvc,             value: "{{inputs.parameters.worldPvc}}"},
+               {name: worldName,            value: "{{inputs.parameters.worldName}}"},
+               {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+               {name: logLocation,          value: "{{inputs.parameters.logLocation}}"},
+               {name: volumeLocation,       value: "{{inputs.parameters.volumeLocation}}"},
+               {name: workingLocation,      value: "{{inputs.parameters.workingLocation}}"},
+               {name: version,              value: "{{inputs.parameters.version}}"},
+               {name: reconName,            value: "{{inputs.parameters.reconName}}"},
+               {name: reconId,              value: "{{inputs.parameters.reconId}}"},
+               {name: configFile,           value: "{{inputs.parameters.configFile}}"},
+               {name: retryCount,           value: "{{inputs.parameters.retryCount}}"},
+               {name: taskName,             value: "increment-step-world-join"}]
+        - name: build-lod-tilesets
+          template: join-tilesets
+          depends: reconstruction || reconstruction.Failed
+          arguments:
+            parameters:
+              [{name: worldPvc,             value: "{{inputs.parameters.worldPvc}}"},
+               {name: worldName,            value: "{{inputs.parameters.worldName}}"},
+               {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+               {name: volumeLocation,       value: "{{inputs.parameters.volumeLocation}}"},
+               {name: workingLocation,      value: "{{inputs.parameters.workingLocation}}"},
+               {name: version,              value: "{{inputs.parameters.version}}"},
+               {name: reconName,            value: "{{inputs.parameters.reconName}}"},
+               {name: configFile,           value: "{{inputs.parameters.configFile}}"},
+               {name: retryCount,           value: "{{inputs.parameters.retryCount}}"},
+               {name: tilesFolder,          value: "{{tasks.build-projects.outputs.parameters.tiles_folder}}"},
+               {name: tilesetName,          value: "tileset_lod.json"},
+               {name: joinedTilesetName,    value: "lod_tileset.json"},
+               {name: taskName,             value: "build-lod-tilesets"}]
+        - name: efs-sync-to-s3
+          template: efs-sync-to-s3
+          depends: "(recon-tilesets || recon-tilesets.Failed) && (world-tileset || world-tileset.Failed) && (build-lod-tilesets || build-lod-tilesets.Failed)"
+          arguments:
+            parameters:
+              [{name: worldPipelineBucket,  value: "{{inputs.parameters.worldPipelineBucket}}"},
+               {name: worldTempBucket,      value: "{{inputs.parameters.worldTempBucket}}"},
+               {name: worldTileBucket,      value: "{{inputs.parameters.worldTileBucket}}"},
+               {name: worldPvc,             value: "{{inputs.parameters.worldPvc}}"},
+               {name: worldName,            value: "{{inputs.parameters.worldName}}"},
+               {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+               {name: region,               value: "{{inputs.parameters.region}}"},
+               {name: volumeLocation,       value: "{{inputs.parameters.volumeLocation}}"},
+               {name: workingLocation,      value: "{{inputs.parameters.workingLocation}}"},
+               {name: logLocation,          value: "{{inputs.parameters.logLocation}}"},
+               {name: version,              value: "{{inputs.parameters.version}}"},
+               {name: configFile,           value: "{{inputs.parameters.configFile}}"},
+               {name: reconName,            value: "{{inputs.parameters.reconName}}"},
+               {name: reconId,              value: "{{inputs.parameters.reconId}}"},
+               {name: retryCount,           value: "{{inputs.parameters.retryCount}}"}]
+        - name: db-success-update
+          template: db-update
+          depends: efs-sync-to-s3
+          arguments:
+            parameters:
+              [ {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+                {name: worldName,            value: "{{inputs.parameters.worldName}}"},
+                {name: version,              value: "{{inputs.parameters.version}}"},
+                {name: workingLocation,      value: "{{inputs.parameters.workingLocation}}"},
+                {name: logLocation,          value: "{{inputs.parameters.logLocation}}"},
+                {name: retryCount,           value: "{{inputs.parameters.retryCount}}"},
+                {name: reconName,            value: "{{inputs.parameters.reconName}}"},
+                {name: configFile,           value: "{{inputs.parameters.configFile}}"},
+                {name: reconId,              value: "{{inputs.parameters.reconId}}"},
+                {name: status,               value: "Built"} ]
+
+  - name: recon-alignment-process
+    inputs:
+      parameters:
+      - name: worldName
+        value: "{{workflow.parameters.worldName}}"
+      - name: imageRepo
+        value: "{{workflow.parameters.imageRepo}}"
+      - name: region
+        value: "{{workflow.parameters.region}}"
+      - name: volumeLocation
+        value: "{{workflow.parameters.volumeLocation}}"
+      - name: workingLocation
+        value: "{{workflow.parameters.workingLocation}}"
+      - name: logLocation
+        value: "{{workflow.parameters.logLocation}}"
+      - name: version
+        value: "{{workflow.parameters.version}}"
+      - name: reconName
+        value: "{{workflow.parameters.reconName}}"
+      - name: reconId
+        value: "{{workflow.parameters.reconId}}"
+      - name: configFile
+        value: "{{workflow.parameters.configFile}}"
+      - name: retryCount
+        value: "{{workflow.parameters.retryCount}}"
+      - name: worldPipelineBucket
+        valueFrom:
+          configMapKeyRef:
+            name: "{{workflow.parameters.worldConfig}}"
+            key: pipeline
+      - name: worldTempBucket
+        valueFrom:
+          configMapKeyRef:
+            name: "{{workflow.parameters.worldConfig}}"
+            key: temp
+      - name: worldTileBucket
+        valueFrom:
+          configMapKeyRef:
+            name: "{{workflow.parameters.worldConfig}}"
+            key: tile
+      - name: worldPvc
+        valueFrom:
+          configMapKeyRef:
+            name: "{{workflow.parameters.worldConfig}}"
+            key: pvc
+    dag:
+        tasks:
+        - name: update-recon-db
+          template: update-recon-db
+          arguments:
+            parameters:
+              [{name: worldName,            value: "{{inputs.parameters.worldName}}"},
+               {name: worldPvc,             value: "{{inputs.parameters.worldPvc}}"},
+               {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+               {name: volumeLocation,       value: "{{inputs.parameters.volumeLocation}}"},
+               {name: workingLocation,      value: "{{inputs.parameters.workingLocation}}"},
+               {name: logLocation,          value: "{{inputs.parameters.logLocation}}"},
+               {name: version,              value: "{{inputs.parameters.version}}"},
+               {name: reconName,            value: "{{inputs.parameters.reconName}}"},
+               {name: reconId,              value: "{{inputs.parameters.reconId}}"},
+               {name: configFile,           value: "{{inputs.parameters.configFile}}"},
+               {name: retryCount,           value: "{{inputs.parameters.retryCount}}"}]
+        - name: s3-temp-to-efs
+          template: s3-temp-to-efs
+          depends: update-recon-db
+          arguments:
+            parameters:
+              [{name: worldPipelineBucket,  value: "{{inputs.parameters.worldPipelineBucket}}"},
+               {name: worldTempBucket,      value: "{{inputs.parameters.worldTempBucket}}"},
+               {name: worldPvc,             value: "{{inputs.parameters.worldPvc}}"},
+               {name: worldName,            value: "{{inputs.parameters.worldName}}"},
+               {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+               {name: region,               value: "{{inputs.parameters.region}}"},
+               {name: volumeLocation,       value: "{{inputs.parameters.volumeLocation}}"},
+               {name: workingLocation,      value: "{{inputs.parameters.workingLocation}}"},
+               {name: logLocation,          value: "{{inputs.parameters.logLocation}}"},
+               {name: version,              value: "{{inputs.parameters.version}}"},
+               {name: reconName,            value: "{{inputs.parameters.reconName}}"},
+               {name: reconId,              value: "{{inputs.parameters.reconId}}"},
+               {name: configFile,           value: "{{inputs.parameters.configFile}}"},
+               {name: retryCount,           value: "{{inputs.parameters.retryCount}}"}]
+        - name: plan-projects
+          template: plan-projects
+          depends: s3-temp-to-efs
+          arguments:
+            parameters:
+              [{name: worldName,            value: "{{inputs.parameters.worldName}}"},
+               {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+               {name: volumeLocation,       value: "{{inputs.parameters.volumeLocation}}"},
+               {name: workingLocation,      value: "{{inputs.parameters.workingLocation}}"},
+               {name: logLocation,          value: "{{inputs.parameters.logLocation}}"},
+               {name: version,              value: "{{inputs.parameters.version}}"},
+               {name: reconName,            value: "{{inputs.parameters.reconName}}"},
+               {name: reconId,              value: "{{inputs.parameters.reconId}}"},
+               {name: configFile,           value: "{{inputs.parameters.configFile}}"},
+               {name: retryCount,           value: "{{inputs.parameters.retryCount}}"}]
+        - name: build-projects
+          template: build-projects
+          depends: plan-projects
+          arguments:
+            parameters:
+              [{name: worldPvc,             value: "{{inputs.parameters.worldPvc}}"},
+               {name: worldName,            value: "{{inputs.parameters.worldName}}"},
+               {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+               {name: volumeLocation,       value: "{{inputs.parameters.volumeLocation}}"},
+               {name: workingLocation,      value: "{{inputs.parameters.workingLocation}}"},
+               {name: logLocation,          value: "{{inputs.parameters.logLocation}}"},
+               {name: version,              value: "{{inputs.parameters.version}}"},
+               {name: reconName,            value: "{{inputs.parameters.reconName}}"},
+               {name: reconId,              value: "{{inputs.parameters.reconId}}"},
+               {name: configFile,           value: "{{inputs.parameters.configFile}}"},
+               {name: retryCount,           value: "{{inputs.parameters.retryCount}}"}]
+        - name: reconstruction-pre-align
+          template: reconstruction-pre-align
+          depends: build-projects
+          arguments:
+            parameters:
+              [{name: worldPipelineBucket,  value: "{{inputs.parameters.worldPipelineBucket}}"},
+               {name: worldTempBucket,      value: "{{inputs.parameters.worldTempBucket}}"},
+               {name: worldTileBucket,      value: "{{inputs.parameters.worldTileBucket}}"},
+               {name: worldPvc,             value: "{{inputs.parameters.worldPvc}}"},
+               {name: worldName,            value: "{{inputs.parameters.worldName}}"},
+               {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+               {name: region,               value: "{{inputs.parameters.region}}"},
+               {name: volumeLocation,       value: "{{inputs.parameters.volumeLocation}}"},
+               {name: workingLocation,      value: "{{inputs.parameters.workingLocation}}"},
+               {name: logLocation,          value: "{{inputs.parameters.logLocation}}"},
+               {name: version,              value: "{{inputs.parameters.version}}"},
+               {name: reconName,            value: "{{inputs.parameters.reconName}}"},
+               {name: configFile,           value: "{{inputs.parameters.configFile}}"},
+               {name: retryCount,           value: "{{inputs.parameters.retryCount}}"},
+               {name: project,              value: "{{item}}"}]
+          withParam: "{{tasks.build-projects.outputs.parameters.projects}}"
+        - name: submodel-alignment
+          template: submodel-alignment
+          depends: reconstruction-pre-align || reconstruction-pre-align.Failed
+          arguments:
+            parameters:
+              [{name: worldPvc,             value: "{{inputs.parameters.worldPvc}}"},
+               {name: worldName,            value: "{{inputs.parameters.worldName}}"},
+               {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+               {name: volumeLocation,       value: "{{inputs.parameters.volumeLocation}}"},
+               {name: workingLocation,      value: "{{inputs.parameters.workingLocation}}"},
+               {name: logLocation,          value: "{{inputs.parameters.logLocation}}"},
+               {name: version,              value: "{{inputs.parameters.version}}"},
+               {name: reconName,            value: "{{inputs.parameters.reconName}}"},
+               {name: reconId,              value: "{{inputs.parameters.reconId}}"},
+               {name: configFile,           value: "{{inputs.parameters.configFile}}"},
+               {name: retryCount,           value: "{{inputs.parameters.retryCount}}"}]
+        - name: reconstruction-post-align
+          template: reconstruction-post-align
+          depends: submodel-alignment
+          arguments:
+            parameters:
+              [{name: worldPipelineBucket,  value: "{{inputs.parameters.worldPipelineBucket}}"},
+               {name: worldTempBucket,      value: "{{inputs.parameters.worldTempBucket}}"},
+               {name: worldTileBucket,      value: "{{inputs.parameters.worldTileBucket}}"},
+               {name: worldPvc,             value: "{{inputs.parameters.worldPvc}}"},
+               {name: worldName,            value: "{{inputs.parameters.worldName}}"},
+               {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+               {name: region,               value: "{{inputs.parameters.region}}"},
+               {name: volumeLocation,       value: "{{inputs.parameters.volumeLocation}}"},
+               {name: workingLocation,      value: "{{inputs.parameters.workingLocation}}"},
+               {name: logLocation,          value: "{{inputs.parameters.logLocation}}"},
+               {name: version,              value: "{{inputs.parameters.version}}"},
+               {name: reconName,            value: "{{inputs.parameters.reconName}}"},
+               {name: configFile,           value: "{{inputs.parameters.configFile}}"},
+               {name: retryCount,           value: "{{inputs.parameters.retryCount}}"},
+               {name: project,              value: "{{item}}"}]
+          withParam: "{{tasks.build-projects.outputs.parameters.projects}}"
+        - name: recon-tilesets
+          template: join-tilesets
+          depends: reconstruction-post-align || reconstruction-post-align.Failed
+          arguments:
+            parameters:
+              [{name: worldPvc,             value: "{{inputs.parameters.worldPvc}}"},
+               {name: worldName,            value: "{{inputs.parameters.worldName}}"},
+               {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+               {name: volumeLocation,       value: "{{inputs.parameters.volumeLocation}}"},
+               {name: workingLocation,      value: "{{inputs.parameters.workingLocation}}"},
+               {name: version,              value: "{{inputs.parameters.version}}"},
+               {name: reconName,            value: "{{inputs.parameters.reconName}}"},
+               {name: reconId,              value: "{{inputs.parameters.reconId}}"},
+               {name: configFile,           value: "{{inputs.parameters.configFile}}"},
+               {name: retryCount,           value: "{{inputs.parameters.retryCount}}"},
+               {name: tilesFolder,          value: "{{tasks.build-projects.outputs.parameters.project_folder}}"},
+               {name: tilesetName,          value: "tileset.json"},
+               {name: joinedTilesetName,    value: "recon_tileset.json"},
+               {name: taskName,             value: "recon-tilesets"}]
+        - name: increment-step-recon-join
+          template: increment-step
+          depends: recon-tilesets
+          arguments:
+            parameters:
+              [{name: worldPvc,             value: "{{inputs.parameters.worldPvc}}"},
+               {name: worldName,            value: "{{inputs.parameters.worldName}}"},
+               {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+               {name: logLocation,          value: "{{inputs.parameters.logLocation}}"},
+               {name: volumeLocation,       value: "{{inputs.parameters.volumeLocation}}"},
+               {name: workingLocation,      value: "{{inputs.parameters.workingLocation}}"},
+               {name: version,              value: "{{inputs.parameters.version}}"},
+               {name: reconName,            value: "{{inputs.parameters.reconName}}"},
+               {name: reconId,              value: "{{inputs.parameters.reconId}}"},
+               {name: configFile,           value: "{{inputs.parameters.configFile}}"},
+               {name: retryCount,           value: "{{inputs.parameters.retryCount}}"},
+               {name: taskName,             value: "increment-step-recon-join"}]
+        - name: world-tileset
+          template: join-tilesets
+          depends: reconstruction-post-align || reconstruction-post-align.Failed
+          arguments:
+            parameters:
+              [{name: worldPvc,             value: "{{inputs.parameters.worldPvc}}"},
+               {name: worldName,            value: "{{inputs.parameters.worldName}}"},
+               {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+               {name: volumeLocation,       value: "{{inputs.parameters.volumeLocation}}"},
+               {name: workingLocation,      value: "{{inputs.parameters.workingLocation}}"},
+               {name: version,              value: "{{inputs.parameters.version}}"},
+               {name: reconName,            value: "{{inputs.parameters.reconName}}"},
+               {name: reconId,              value: "{{inputs.parameters.reconId}}"},
+               {name: configFile,           value: "{{inputs.parameters.configFile}}"},
+               {name: retryCount,           value: "{{inputs.parameters.retryCount}}"},
+               {name: tilesFolder,          value: "{{tasks.build-projects.outputs.parameters.tiles_folder}}"},
+               {name: tilesetName,          value: "tileset.json"},
+               {name: joinedTilesetName,    value: "recon_tileset.json"},
+               {name: taskName,             value: "world-tileset"}]
+        - name: increment-step-world-join
+          template: increment-step
+          depends: world-tileset
+          arguments:
+            parameters:
+              [{name: worldPvc,             value: "{{inputs.parameters.worldPvc}}"},
+               {name: worldName,            value: "{{inputs.parameters.worldName}}"},
+               {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+               {name: logLocation,          value: "{{inputs.parameters.logLocation}}"},
+               {name: volumeLocation,       value: "{{inputs.parameters.volumeLocation}}"},
+               {name: workingLocation,      value: "{{inputs.parameters.workingLocation}}"},
+               {name: version,              value: "{{inputs.parameters.version}}"},
+               {name: reconName,            value: "{{inputs.parameters.reconName}}"},
+               {name: reconId,              value: "{{inputs.parameters.reconId}}"},
+               {name: configFile,           value: "{{inputs.parameters.configFile}}"},
+               {name: retryCount,           value: "{{inputs.parameters.retryCount}}"},
+               {name: taskName,             value: "increment-step-world-join"}]
+        - name: build-lod-tilesets
+          template: join-tilesets
+          depends: reconstruction-post-align || reconstruction-post-align.Failed
+          arguments:
+            parameters:
+              [{name: worldPvc,             value: "{{inputs.parameters.worldPvc}}"},
+               {name: worldName,            value: "{{inputs.parameters.worldName}}"},
+               {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+               {name: volumeLocation,       value: "{{inputs.parameters.volumeLocation}}"},
+               {name: workingLocation,      value: "{{inputs.parameters.workingLocation}}"},
+               {name: version,              value: "{{inputs.parameters.version}}"},
+               {name: reconName,            value: "{{inputs.parameters.reconName}}"},
+               {name: configFile,           value: "{{inputs.parameters.configFile}}"},
+               {name: retryCount,           value: "{{inputs.parameters.retryCount}}"},
+               {name: tilesFolder,          value: "{{tasks.build-projects.outputs.parameters.tiles_folder}}"},
+               {name: tilesetName,          value: "tileset_lod.json"},
+               {name: joinedTilesetName,    value: "lod_tileset.json"},
+               {name: taskName,             value: "build-lod-tilesets"}]
+        - name: efs-sync-to-s3
+          template: efs-sync-to-s3
+          depends: "(recon-tilesets || recon-tilesets.Failed) && (world-tileset || world-tileset.Failed) && (build-lod-tilesets || build-lod-tilesets.Failed)"
+          arguments:
+            parameters:
+              [{name: worldPipelineBucket,  value: "{{inputs.parameters.worldPipelineBucket}}"},
+               {name: worldTempBucket,      value: "{{inputs.parameters.worldTempBucket}}"},
+               {name: worldTileBucket,      value: "{{inputs.parameters.worldTileBucket}}"},
+               {name: worldPvc,             value: "{{inputs.parameters.worldPvc}}"},
+               {name: worldName,            value: "{{inputs.parameters.worldName}}"},
+               {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+               {name: region,               value: "{{inputs.parameters.region}}"},
+               {name: volumeLocation,       value: "{{inputs.parameters.volumeLocation}}"},
+               {name: workingLocation,      value: "{{inputs.parameters.workingLocation}}"},
+               {name: logLocation,          value: "{{inputs.parameters.logLocation}}"},
+               {name: version,              value: "{{inputs.parameters.version}}"},
+               {name: configFile,           value: "{{inputs.parameters.configFile}}"},
+               {name: reconName,            value: "{{inputs.parameters.reconName}}"},
+               {name: reconId,              value: "{{inputs.parameters.reconId}}"},
+               {name: retryCount,           value: "{{inputs.parameters.retryCount}}"}]
+        - name: db-success-update
+          template: db-update
+          depends: efs-sync-to-s3
+          arguments:
+            parameters:
+              [ {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+                {name: worldName,            value: "{{inputs.parameters.worldName}}"},
+                {name: version,              value: "{{inputs.parameters.version}}"},
+                {name: workingLocation,      value: "{{inputs.parameters.workingLocation}}"},
+                {name: logLocation,          value: "{{inputs.parameters.logLocation}}"},
+                {name: retryCount,           value: "{{inputs.parameters.retryCount}}"},
+                {name: reconName,            value: "{{inputs.parameters.reconName}}"},
+                {name: configFile,           value: "{{inputs.parameters.configFile}}"},
+                {name: reconId,              value: "{{inputs.parameters.reconId}}"},
+                {name: status,               value: "Built"} ]
+
+  - name: s3-temp-to-efs
+    inputs:
+        parameters:
+        - name: worldPipelineBucket
+        - name: worldTempBucket
+        - name: worldPvc
+        - name: worldName
+        - name: imageRepo
+        - name: region
+        - name: volumeLocation
+        - name: workingLocation
+        - name: logLocation
+        - name: version
+        - name: reconName
+        - name: reconId
+        - name: configFile
+        - name: retryCount
+        - name: cpuCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: worker-cores
+        - name: memCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: worker-ram
+    retryStrategy:
+      limit: "{{inputs.parameters.retryCount}}"
+      retryPolicy: OnError
+    podSpecPatch: |
+      containers:
+        - name: main
+          resources:
+            requests:
+              cpu: "{{inputs.parameters.cpuCount}}"
+            # limits:
+            #   memory: "{{inputs.parameters.memCount}}"
+    script:
+        image: "{{inputs.parameters.imageRepo}}/worker:{{inputs.parameters.version}}"
+        command: [bash]
+        source: | 
+            set -eo pipefail
+            mkdir -p {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/{{inputs.parameters.logLocation}}
+            exec > >(tee -a {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/{{inputs.parameters.logLocation}}/{{workflow.name}}_s3_temp_to_efs.log) 2>&1
+            
+            start_time=$(date -u +%s)
+              # sync s3 temp for reconstruction to working efs
+              echo "Syncing Pipeline config to Project config for {{inputs.parameters.reconName}}:" 
+              aws s3 cp --region {{inputs.parameters.region}} --no-progress s3://{{inputs.parameters.worldPipelineBucket}}/{{inputs.parameters.configFile}} s3://{{inputs.parameters.worldTempBucket}}/{{inputs.parameters.reconName}}/{{inputs.parameters.configFile}}
+              # sync pipeline s3 to pipeline efs
+              echo "{{workflow.name}} syncing S3 Pipeline to EFS Pipeline:"
+              aws s3 sync --region {{inputs.parameters.region}} --no-progress s3://{{inputs.parameters.worldPipelineBucket}} {{inputs.parameters.volumeLocation}}
+              echo "Syncing S3 World Temp to EFS Working for {{inputs.parameters.reconName}}:"
+              aws s3 sync --region {{inputs.parameters.region}} --no-progress s3://{{inputs.parameters.worldTempBucket}}/{{inputs.parameters.reconName}} {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}
+
+              # Increment step
+              world_id=$(curl -s -X 'GET' 'http://bda-tiledb-ws.bda:8080/world' -H 'accept: */*' | jq -r '.[] | select(.name == "{{inputs.parameters.worldName}}") | .id')
+              response=$(curl -X 'PUT' 'http://bda-tiledb-ws.bda:8080/reconstruction/{{inputs.parameters.reconId}}/step' -w "%{http_code}" -s -o status.json -H 'Content-Type: application/json')
+              if [ "$response" -ne 200 ]; then
+                echo "Reconstruction {{inputs.parameters.reconName}} with id {{inputs.parameters.reconId}} had http response code "$response""
+                exit "$response"
+              fi
+              step=$(jq '{id,name,world,completedSteps,totalSteps} + {"currentStep": "s3-temp-to-efs"}' status.json)
+              mosquitto_pub -h 'mosquitto-mqtts.bda' -t world/$world_id/reconstruction/{{inputs.parameters.reconId}} -m "$step"
+            end_time=$(date -u +%s)
+            duration=$((end_time - start_time))
+            formatted_duration=$(printf "%d:%02d:%02d" "$((duration / 3600))" "$(((duration % 3600) / 60))" "$((duration % 60))")
+            echo s3-temp-to-efs,, $(date +"%Y-%m-%d %H:%M:%S" -ud "@$start_time"), $(date +"%Y-%m-%d %H:%M:%S" -ud "@$end_time"), $formatted_duration >> {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/{{inputs.parameters.logLocation}}/{{workflow.name}}_times.csv
+        volumeMounts:
+        - name: workdir
+          mountPath: "{{inputs.parameters.workingLocation}}"
+        - name: volumedir
+          mountPath: "{{inputs.parameters.volumeLocation}}"
+    tolerations:
+    - key: "s3gis.be/pool"
+      operator: "Equal"
+      value: "worker"
+      effect: "NoSchedule"
+    nodeSelector:
+      node-type: worker
+    synchronization:
+      semaphore:
+        configMapKeyRef:
+          name:  "{{workflow.parameters.worldConfig}}"
+          key: worker-limit
+    volumes:
+      - name: volumedir
+        persistentVolumeClaim:
+          claimName: "{{inputs.parameters.worldPvc}}"
+    metadata:
+      labels:
+        world: "{{inputs.parameters.worldName}}"
+        workflow: "{{workflow.name}}"
+
+  - name: plan-projects
+    inputs:
+        parameters:
+        - name: worldName
+        - name: imageRepo
+        - name: volumeLocation
+        - name: workingLocation
+        - name: logLocation
+        - name: version
+        - name: reconName
+        - name: reconId
+        - name: configFile
+        - name: retryCount
+        - name: cpuCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: worker-cores
+        - name: memCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: worker-ram
+    retryStrategy:
+      limit: "{{inputs.parameters.retryCount}}"
+      retryPolicy: OnError
+    podSpecPatch: |
+      containers:
+        - name: main
+          resources:
+            requests:
+              cpu: "{{inputs.parameters.cpuCount}}"
+            # limits:
+            #   memory: "{{inputs.parameters.memCount}}"
+    script:
+        image: "{{inputs.parameters.imageRepo}}/cpu_tasks:{{inputs.parameters.version}}"
+        command: [bash]
+        source: | 
+            set -eo pipefail
+            mkdir -p {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/{{inputs.parameters.logLocation}}
+            exec > >(tee -a {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/{{inputs.parameters.logLocation}}/{{workflow.name}}_plan_projects.log) 2>&1
+            
+            start_time=$(date -u +%s)
+              echo Updating config to point to pipeline folders for symlinking and saving as recon_config.json
+              jq '(.imagesFolder, .masksFolder, .segmentationsFolder, .exifFolder, .featuresFolder, .matchesFolder) |= "{{inputs.parameters.volumeLocation}}/\(.)"' {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/{{inputs.parameters.configFile}} > {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/recon_config.json
+              
+              cd {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}
+              
+              echo sfm-utils plan-projects --projectPlanner.procCount {{inputs.parameters.cpuCount}} --load recon_config.json
+              sfm-utils plan-projects --projectPlanner.procCount {{inputs.parameters.cpuCount}} --load recon_config.json
+
+              # Increment step
+              world_id=$(curl -s -X 'GET' 'http://bda-tiledb-ws.bda:8080/world' -H 'accept: */*' | jq -r '.[] | select(.name == "{{inputs.parameters.worldName}}") | .id')
+              response=$(curl -X 'PUT' 'http://bda-tiledb-ws.bda:8080/reconstruction/{{inputs.parameters.reconId}}/step' -w "%{http_code}" -s -o status.json -H 'Content-Type: application/json')
+              if [ "$response" -ne 200 ]; then
+                echo "Reconstruction {{inputs.parameters.reconName}} with id {{inputs.parameters.reconId}} had http response code "$response""
+                exit "$response"
+              fi
+              step=$(jq '{id,name,world,completedSteps,totalSteps} + {"currentStep": "plan-projects"}' status.json)
+              mosquitto_pub -h 'mosquitto-mqtts.bda' -t world/$world_id/reconstruction/{{inputs.parameters.reconId}} -m "$step"
+            end_time=$(date -u +%s)
+            duration=$((end_time - start_time))
+            formatted_duration=$(printf "%d:%02d:%02d" "$((duration / 3600))" "$(((duration % 3600) / 60))" "$((duration % 60))")
+            echo plan-projects,, $(date +"%Y-%m-%d %H:%M:%S" -ud "@$start_time"), $(date +"%Y-%m-%d %H:%M:%S" -ud "@$end_time"), $formatted_duration >> {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/{{inputs.parameters.logLocation}}/{{workflow.name}}_times.csv
+        volumeMounts:
+        - name: workdir
+          mountPath: "{{inputs.parameters.workingLocation}}"
+    tolerations:
+    - key: "s3gis.be/pool"
+      operator: "Equal"
+      value: "worker"
+      effect: "NoSchedule"
+    nodeSelector:
+      node-type: worker
+    synchronization:
+      semaphore:
+        configMapKeyRef:
+          name:  "{{workflow.parameters.worldConfig}}"
+          key: worker-limit
+    metadata:
+      labels:
+        world: "{{inputs.parameters.worldName}}"
+        workflow: "{{workflow.name}}"
+  
+  - name: build-projects
+    inputs:
+        parameters:
+        - name: worldPvc
+        - name: worldName
+        - name: imageRepo
+        - name: volumeLocation
+        - name: workingLocation
+        - name: logLocation
+        - name: version
+        - name: reconName
+        - name: reconId
+        - name: configFile
+        - name: retryCount
+        - name: cpuCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: worker-cores
+        - name: memCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: worker-ram
+    retryStrategy:
+      limit: "{{inputs.parameters.retryCount}}"
+      retryPolicy: OnError
+    podSpecPatch: |
+      containers:
+        - name: main
+          resources:
+            requests:
+              cpu: "{{inputs.parameters.cpuCount}}"
+            # limits:
+            #   memory: "{{inputs.parameters.memCount}}"
+    script:
+        image: "{{inputs.parameters.imageRepo}}/cpu_tasks:{{inputs.parameters.version}}"
+        command: [bash]
+        source: | 
+            set -eo pipefail
+            mkdir -p {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/{{inputs.parameters.logLocation}}
+            exec > >(tee -a {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/{{inputs.parameters.logLocation}}/{{workflow.name}}_build_projects.log) 2>&1
+            
+            start_time=$(date -u +%s)
+              cd {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}
+              
+              echo sfm-utils build-projects --projectBuilder.procCount {{inputs.parameters.cpuCount}} --load recon_config.json
+              sfm-utils build-projects --projectBuilder.procCount {{inputs.parameters.cpuCount}} --load recon_config.json
+              # tree {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}
+
+              #setup file for fan out of building each zone
+              parent_folder=$(jq -r '.projectBuilder.out' recon_config.json)
+              json_file="project_list.json"
+
+              built_projects=$(find "$parent_folder" -type f -name "openmvs_modifications.json" -exec dirname {} \; | sort -u)
+              # Create an array to hold the results
+              result_array=()
+
+              images_folder=$(jq -r '.imagesFolder' recon_config.json)
+              submodels_folder=$(jq -r '.subprojectsFolder' recon_config.json)
+              ln -s -f $images_folder images
+              mkdir -p {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/$submodels_folder
+
+              submodel_template=$(jq -r '.openSfmSettings.submodel_relpath_template' recon_config.json)
+              index=0
+              # Iterate through each folder and add to the result array
+              while IFS= read -r folder; do
+                  # Softlink the submodel structure
+                  submodel_folder=$(printf $submodel_template $index)
+                  # Note that, at this point, $folder has the parent_folder in it
+                  ln -s -f {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/$folder {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/$submodel_folder
+                  index=$((index+1))
+                  rel_folder=${folder#"$parent_folder/"}
+                  result_array+=("$rel_folder")
+              done <<< "$built_projects"
+              echo "Check submodel linking for $(pwd)"
+              ls -l images
+              echo "Last submodel..."
+              ls -l $submodel_folder
+
+              json_data=$(printf "%s\n" "${result_array[@]}" | jq -R -s -c 'split("\n")[:-1]')
+
+              # Save the JSON result to a file
+              echo "$json_data" > $json_file
+
+              # Save out project folder for combining tilesets for reconstruction
+              echo "{{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/$parent_folder" > "/tmp/project_folder.txt"
+
+              # Save out tiles folder for combining tilesets for world
+              tiles_folder=$(jq -r '.tilesFolder' {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/{{inputs.parameters.configFile}})
+              echo "{{inputs.parameters.volumeLocation}}/$tiles_folder" > "/tmp/tiles_folder.txt"
+
+              # Increment step
+              world_id=$(curl -s -X 'GET' 'http://bda-tiledb-ws.bda:8080/world' -H 'accept: */*' | jq -r '.[] | select(.name == "{{inputs.parameters.worldName}}") | .id')
+              response=$(curl -X 'PUT' 'http://bda-tiledb-ws.bda:8080/reconstruction/{{inputs.parameters.reconId}}/step' -w "%{http_code}" -s -o status.json -H 'Content-Type: application/json')
+              if [ "$response" -ne 200 ]; then
+                echo "Reconstruction {{inputs.parameters.reconName}} with id {{inputs.parameters.reconId}} had http response code "$response""
+                exit "$response"
+              fi
+            step=$(jq '{id,name,world,completedSteps,totalSteps} + {"currentStep": "build-projects"}' status.json)
+            mosquitto_pub -h 'mosquitto-mqtts.bda' -t world/$world_id/reconstruction/{{inputs.parameters.reconId}} -m "$step"
+            end_time=$(date -u +%s)
+            duration=$((end_time - start_time))
+            formatted_duration=$(printf "%d:%02d:%02d" "$((duration / 3600))" "$(((duration % 3600) / 60))" "$((duration % 60))")
+            echo build-projects,, $(date +"%Y-%m-%d %H:%M:%S" -ud "@$start_time"), $(date +"%Y-%m-%d %H:%M:%S" -ud "@$end_time"), $formatted_duration >> {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/{{inputs.parameters.logLocation}}/{{workflow.name}}_times.csv
+        volumeMounts:
+        - name: workdir
+          mountPath: "{{inputs.parameters.workingLocation}}"
+        - name: volumedir
+          mountPath: "{{inputs.parameters.volumeLocation}}"
+    outputs:
+        parameters:
+        - name: projects
+          valueFrom:
+            path: "{{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/project_list.json"
+        - name: project_folder
+          valueFrom:
+            path: /tmp/project_folder.txt
+        - name: tiles_folder
+          valueFrom:
+            path: /tmp/tiles_folder.txt
+    tolerations:
+    - key: "s3gis.be/pool"
+      operator: "Equal"
+      value: "worker"
+      effect: "NoSchedule"
+    nodeSelector:
+      node-type: worker
+    synchronization:
+      semaphore:
+        configMapKeyRef:
+          name:  "{{workflow.parameters.worldConfig}}"
+          key: worker-limit
+    volumes:
+      - name: volumedir
+        persistentVolumeClaim:
+          claimName: "{{inputs.parameters.worldPvc}}"
+    metadata:
+      labels:
+        world: "{{inputs.parameters.worldName}}"
+        workflow: "{{workflow.name}}"
+
+  - name: join-tilesets
+    inputs:
+        parameters:
+        - name: worldPvc
+        - name: worldName
+        - name: imageRepo
+        - name: volumeLocation
+        - name: workingLocation
+        - name: version
+        - name: reconName
+        - name: configFile
+        - name: retryCount
+        - name: tilesFolder
+        - name: taskName
+        - name: tilesetName
+        - name: joinedTilesetName
+        - name: cpuCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: worker-cores
+        - name: memCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: worker-ram
+    retryStrategy:
+      limit: "{{inputs.parameters.retryCount}}"
+      retryPolicy: OnError
+    podSpecPatch: |
+      containers:
+        - name: main
+          resources:
+            requests:
+              cpu: "{{inputs.parameters.cpuCount}}"
+            # limits:
+            #   memory: "{{inputs.parameters.memCount}}"
+    script:
+        image: "{{inputs.parameters.imageRepo}}/worker:{{inputs.parameters.version}}"
+        command: [python3]
+        source: |
+          import os
+          import yaml
+          import json
+          import time
+          import shutil
+          import numpy as np
+          import sys
+          import re
+          import logging
+          from datetime import datetime, timedelta, timezone
+
+          class hourstimedelta(timedelta):
+            def __str__(self):
+              seconds = self.total_seconds()
+              hours = seconds // 3600
+              minutes = (seconds % 3600) // 60
+              seconds = seconds % 60
+              str = '{}:{:02d}:{:02d}'.format(int(hours), int(minutes), int(seconds))
+              return (str)
+
+          def addPrefixToURIs(node, prefix):
+            if "content" in node:
+              content_node = node['content']
+              if "uri" in content_node:
+                tileid = content_node['uri']
+                if tileid:
+                  content_node['uri'] = os.path.normpath(os.path.join(prefix, tileid))
+            if "children" in node:
+              children = node['children']
+              for tile in children:
+                addPrefixToURIs(tile, prefix)
+
+          return_value = 0
+
+          start_time = datetime.now(timezone.utc)
+          with open("{{inputs.parameters.volumeLocation}}/{{inputs.parameters.configFile}}", 'r') as config_file:
+            config_json = json.load(config_file)
+
+          log_location = config_json.get('logsFolder')
+
+          time_log_path = os.path.join("{{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}", log_location, "{{workflow.name}}_times.csv")
+
+          #log_name = "{{inputs.parameters.tilesFolder}}".replace(os.path.sep, '_')
+          log_path = os.path.join("{{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}", log_location, "{{workflow.name}}" + "_{{inputs.parameters.taskName}}" + ".log")
+          logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s [%(levelname)s] %(message)s",
+            handlers=[
+                logging.FileHandler(log_path),
+                logging.StreamHandler(sys.stdout)
+            ]
+          )
+
+          reconstruction_dir="{{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}"
+          joined_tileset_file = "{{inputs.parameters.joinedTilesetName}}"
+          source_tileset_file = "{{inputs.parameters.tilesetName}}"
+
+          tiles_folder = "{{inputs.parameters.tilesFolder}}"
+          if os.path.isdir(tiles_folder):
+
+            #Get list of tileset.jsons to combine
+            tileset_list = []
+            for root, dirs, files in os.walk(tiles_folder):
+              for file in files:
+                if file == source_tileset_file:
+                  relative_path = os.path.relpath(os.path.join(root, file), tiles_folder)
+                  tileset_list.append(relative_path)
+
+            if tileset_list:
+              first_tile = True
+              newtiles = {}
+
+              for tile_file in tileset_list:
+                with open(os.path.join(tiles_folder, tile_file), "r") as f:
+                  tileset = json.load(f)
+                logging.info(f"Joining tilesets:\n {tile_file}") 
+  
+                setparams = tile_file.rsplit('/',1)
+                basetile = tileset['root']
+
+                if first_tile:
+                  first_tile = False
+                  asset = tileset['asset']
+                  ge = tileset['geometricError']
+
+                  rootlist = []
+                  newtiles['asset'] = asset
+                  newtiles["geometricError"] = ge
+                  newroot = basetile.copy()
+                  newroot["children"] = []
+                  newroot.pop("content")
+
+                #print(f"{basetile} adding prefix: {setparams[0]}")
+                addPrefixToURIs(basetile, setparams[0])
+                
+                rootlist.append(basetile)
+
+              newroot["children"] = rootlist
+              newtiles['root'] = newroot
+              newroot['transform'] = [1, 0, 0, 0,
+                    0, 1, 0, 0,
+                    0, 0, 1, 0,
+                    0, 0, 0, 1]
+                
+              with open(os.path.join(tiles_folder, joined_tileset_file), "w") as outfile:
+                json.dump(newtiles, outfile, indent=2)
+                logging.info(f"Writing:\n {outfile}") 
+            else:
+              logging.error("{{inputs.parameters.tilesFolder}} contains no tileset.jsons")
+              return_value = 1
+          else:
+            logging.error("{{inputs.parameters.tilesFolder}} not found.")
+            return_value = 1
+
+          end_time = datetime.now(timezone.utc)
+          duration_seconds = (end_time - start_time).total_seconds()
+
+          duration_str = str(hourstimedelta(seconds=int(duration_seconds)))
+          formatted_start_time = start_time.strftime("%Y-%m-%d %H:%M:%S")
+          formatted_end_time = end_time.strftime("%Y-%m-%d %H:%M:%S")
+          with open(time_log_path, 'a') as time_log_file:
+            time_log_file.write(f"{{inputs.parameters.taskName}},, {formatted_start_time}, {formatted_end_time}, {duration_str}\n")
+          sys.exit(return_value)
+        volumeMounts:
+        - name: workdir
+          mountPath: "{{inputs.parameters.workingLocation}}"
+        - name: volumedir
+          mountPath: "{{inputs.parameters.volumeLocation}}"
+    tolerations:
+    - key: "s3gis.be/pool"
+      operator: "Equal"
+      value: "worker"
+      effect: "NoSchedule"
+    nodeSelector:
+      node-type: worker
+    synchronization:
+      semaphore:
+        configMapKeyRef:
+          name:  "{{workflow.parameters.worldConfig}}"
+          key: worker-limit
+    volumes:
+      - name: volumedir
+        persistentVolumeClaim:
+          claimName: "{{inputs.parameters.worldPvc}}"
+    metadata:
+      labels:
+        world: "{{inputs.parameters.worldName}}"
+        workflow: "{{workflow.name}}"
+
+  - name: increment-step
+    inputs:
+        parameters:
+        - name: worldPvc
+        - name: worldName
+        - name: imageRepo
+        - name: workingLocation
+        - name: logLocation
+        - name: version
+        - name: retryCount
+        - name: reconName
+        - name: reconId
+        - name: configFile
+        - name: taskName
+        - name: cpuCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: worker-cores
+        - name: memCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: worker-ram
+    retryStrategy:
+        limit: "{{inputs.parameters.retryCount}}"
+        retryPolicy: OnError
+    podSpecPatch: |
+      containers:
+        - name: main
+          resources:
+            requests:
+              cpu: "{{inputs.parameters.cpuCount}}"
+            # limits:
+            #   memory: "{{inputs.parameters.memCount}}"
+    script:
+        image: "{{inputs.parameters.imageRepo}}/worker:{{inputs.parameters.version}}"
+        command: [bash]
+        source: |
+            set -eo pipefail
+            mkdir -p {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/{{inputs.parameters.logLocation}}
+            exec > >(tee -a {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/{{inputs.parameters.logLocation}}/{{inputs.parameters.taskName}}.log) 2>&1
+            
+            start_time=$(date -u +%s)
+              set -eo pipefail
+              # Increment step
+              world_id=$(curl -s -X 'GET' 'http://bda-tiledb-ws.bda:8080/world' -H 'accept: */*' | jq -r '.[] | select(.name == "{{inputs.parameters.worldName}}") | .id')
+              response=$(curl -X 'PUT' 'http://bda-tiledb-ws.bda:8080/reconstruction/{{inputs.parameters.reconId}}/step' -w "%{http_code}" -s -o status.json -H 'Content-Type: application/json')
+              if [ "$response" -ne 200 ]; then
+                echo "Reconstruction {{inputs.parameters.reconName}} with id {{inputs.parameters.reconId}} had http response code "$response""
+                exit "$response"
+              fi
+              step=$(jq '{id,name,world,completedSteps,totalSteps} + {"currentStep": "{{inputs.parameters.taskName}}" }' status.json)
+              mosquitto_pub -h 'mosquitto-mqtts.bda' -t world/$world_id/reconstruction/{{inputs.parameters.reconId}} -m "$step"
+            end_time=$(date -u +%s)
+            duration=$((end_time - start_time))
+            formatted_duration=$(printf "%d:%02d:%02d" "$((duration / 3600))" "$(((duration % 3600) / 60))" "$((duration % 60))")
+            echo {{inputs.parameters.taskName}},, $(date +"%Y-%m-%d %H:%M:%S" -ud "@$start_time"), $(date +"%Y-%m-%d %H:%M:%S" -ud "@$end_time"), $formatted_duration >> {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/{{inputs.parameters.logLocation}}/{{workflow.name}}_times.csv
+        volumeMounts:
+          - name: workdir
+            mountPath: "{{inputs.parameters.workingLocation}}"
+    tolerations:
+    - key: "s3gis.be/pool"
+      operator: "Equal"
+      value: "worker"
+      effect: "NoSchedule"
+    nodeSelector:
+      node-type: worker
+    synchronization:
+      semaphore:
+        configMapKeyRef:
+          name:  "{{workflow.parameters.worldConfig}}"
+          key: worker-limit
+    volumes:
+      - name: volumedir
+        persistentVolumeClaim:
+          claimName: "{{inputs.parameters.worldPvc}}"
+    metadata:
+      labels:
+        world: "{{inputs.parameters.worldName}}"
+        workflow: "{{workflow.name}}"
+
+  - name: efs-sync-to-s3
+    inputs:
+        parameters:
+        - name: worldPipelineBucket
+        - name: worldTempBucket
+        - name: worldTileBucket
+        - name: worldPvc
+        - name: worldName
+        - name: imageRepo
+        - name: region
+        - name: volumeLocation
+        - name: workingLocation
+        - name: logLocation
+        - name: version
+        - name: reconName
+        - name: reconId
+        - name: configFile
+        - name: retryCount
+        - name: cpuCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: worker-cores
+        - name: memCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: worker-ram
+    retryStrategy:
+      limit: "{{inputs.parameters.retryCount}}"
+      retryPolicy: OnError
+    podSpecPatch: |
+      containers:
+        - name: main
+          resources:
+            requests:
+              cpu: "{{inputs.parameters.cpuCount}}"
+            # limits:
+            #   memory: "{{inputs.parameters.memCount}}"
+    script:
+        image: "{{inputs.parameters.imageRepo}}/worker:{{inputs.parameters.version}}"
+        command: [bash]
+        source: | 
+            set -eo pipefail
+            mkdir -p {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/{{inputs.parameters.logLocation}}
+            exec > >(tee -a {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/{{inputs.parameters.logLocation}}/{{workflow.name}}_efs_to_s3_sync.log) 2>&1
+            start_time=$(date -u +%s)
+              # Sync for working temp
+              echo "{{workflow.name}} Syncing EFS Working to S3 Temp:"
+              aws s3 sync --region {{inputs.parameters.region}} --no-progress --no-follow-symlinks {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}} s3://{{inputs.parameters.worldTempBucket}}/{{inputs.parameters.reconName}}
+              echo "Syncing World tileset.json":
+              tiles_folder=$(jq -r '.tilesFolder' "{{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/{{inputs.parameters.configFile}}")
+              aws s3 sync --region {{inputs.parameters.region}} --no-progress {{inputs.parameters.volumeLocation}}/$tiles_folder s3://{{inputs.parameters.worldTileBucket}} --exclude "*" --include "*.json" --include "*.glb" --include "*.ktx2"
+              aws s3 sync --region {{inputs.parameters.region}} --no-progress {{inputs.parameters.volumeLocation}}/$tiles_folder s3://{{inputs.parameters.worldPipelineBucket}}/$tiles_folder
+
+              # Increment step
+              world_id=$(curl -s -X 'GET' 'http://bda-tiledb-ws.bda:8080/world' -H 'accept: */*' | jq -r '.[] | select(.name == "{{inputs.parameters.worldName}}") | .id')
+              response=$(curl -X 'PUT' 'http://bda-tiledb-ws.bda:8080/reconstruction/{{inputs.parameters.reconId}}/step' -w "%{http_code}" -s -o status.json -H 'Content-Type: application/json')
+              if [ "$response" -ne 200 ]; then
+                echo "Reconstruction {{inputs.parameters.reconName}} with id {{inputs.parameters.reconId}} had http response code "$response""
+                exit "$response"
+              fi
+              step=$(jq '{id,name,world,completedSteps,totalSteps} + {"currentStep": "efs-sync-to-s3"}' status.json)
+              mosquitto_pub -h 'mosquitto-mqtts.bda' -t world/$world_id/reconstruction/{{inputs.parameters.reconId}} -m "$step"
+            end_time=$(date -u +%s)
+            duration=$((end_time - start_time))
+            formatted_duration=$(printf "%d:%02d:%02d" "$((duration / 3600))" "$(((duration % 3600) / 60))" "$((duration % 60))")
+            echo efs-sync-to-s3,, $(date +"%Y-%m-%d %H:%M:%S" -ud "@$start_time"), $(date +"%Y-%m-%d %H:%M:%S" -ud "@$end_time"), $formatted_duration >> {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/{{inputs.parameters.logLocation}}/{{workflow.name}}_times.csv
+        volumeMounts:
+          - name: workdir
+            mountPath: "{{inputs.parameters.workingLocation}}"
+          - name: volumedir
+            mountPath: "{{inputs.parameters.volumeLocation}}"
+    tolerations:
+    - key: "s3gis.be/pool"
+      operator: "Equal"
+      value: "worker"
+      effect: "NoSchedule"
+    nodeSelector:
+      node-type: worker
+    synchronization:
+      semaphore:
+        configMapKeyRef:
+          name:  "{{workflow.parameters.worldConfig}}"
+          key: sync-push-limit
+    volumes:
+      - name: volumedir
+        persistentVolumeClaim:
+          claimName: "{{inputs.parameters.worldPvc}}"
+    metadata:
+      labels:
+        world: "{{inputs.parameters.worldName}}"
+        workflow: "{{workflow.name}}"
+
+  - name: reconstruction
+    inputs:
+      parameters:
+      - name: worldPipelineBucket
+      - name: worldTempBucket
+      - name: worldTileBucket
+      - name: worldPvc
+      - name: worldName
+      - name: imageRepo
+      - name: region
+      - name: volumeLocation
+      - name: workingLocation
+      - name: logLocation
+      - name: version
+      - name: reconName
+      - name: configFile
+      - name: retryCount
+      - name: project
+    dag:
+        tasks:
+        - name: track-and-reconstruct
+          template: track-and-reconstruct
+          arguments:
+            parameters:
+              [{name: worldPvc,             value: "{{inputs.parameters.worldPvc}}"},
+               {name: worldName,            value: "{{inputs.parameters.worldName}}"},
+               {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+               {name: volumeLocation,       value: "{{inputs.parameters.volumeLocation}}"},
+               {name: workingLocation,      value: "{{inputs.parameters.workingLocation}}"},
+               {name: logLocation,          value: "{{inputs.parameters.logLocation}}"},
+               {name: version,              value: "{{inputs.parameters.version}}"},
+               {name: reconName,            value: "{{inputs.parameters.reconName}}"},
+               {name: configFile,           value: "{{inputs.parameters.configFile}}"},
+               {name: retryCount,           value: "{{inputs.parameters.retryCount}}"},
+               {name: project,              value: "{{inputs.parameters.project}}"}]
+        - name: undistort-and-export
+          template: undistort-and-export
+          depends: track-and-reconstruct
+          arguments:
+            parameters:
+              [{name: worldPvc,             value: "{{inputs.parameters.worldPvc}}"},
+               {name: worldName,            value: "{{inputs.parameters.worldName}}"},
+               {name: worldPipelineBucket,  value: "{{inputs.parameters.worldPipelineBucket}}"},
+               {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+               {name: volumeLocation,       value: "{{inputs.parameters.volumeLocation}}"},
+               {name: workingLocation,      value: "{{inputs.parameters.workingLocation}}"},
+               {name: logLocation,          value: "{{inputs.parameters.logLocation}}"},
+               {name: version,              value: "{{inputs.parameters.version}}"},
+               {name: reconName,            value: "{{inputs.parameters.reconName}}"},
+               {name: configFile,           value: "{{inputs.parameters.configFile}}"},
+               {name: region,               value: "{{inputs.parameters.region}}"},
+               {name: retryCount,           value: "{{inputs.parameters.retryCount}}"},
+               {name: project,              value: "{{inputs.parameters.project}}"}]
+        - name: densify
+          template: densify
+          depends: undistort-and-export
+          arguments:
+            parameters:
+              [{name: worldPvc,             value: "{{inputs.parameters.worldPvc}}"},
+               {name: worldName,            value: "{{inputs.parameters.worldName}}"},
+               {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+               {name: volumeLocation,       value: "{{inputs.parameters.volumeLocation}}"},
+               {name: workingLocation,      value: "{{inputs.parameters.workingLocation}}"},
+               {name: logLocation,          value: "{{inputs.parameters.logLocation}}"},
+               {name: version,              value: "{{inputs.parameters.version}}"},
+               {name: reconName,            value: "{{inputs.parameters.reconName}}"},
+               {name: configFile,           value: "{{inputs.parameters.configFile}}"},
+               {name: retryCount,           value: "{{inputs.parameters.retryCount}}"},
+               {name: project,              value: "{{inputs.parameters.project}}"}]
+        - name: reconstruct-mesh
+          template: reconstruct-mesh
+          depends: densify
+          arguments:
+            parameters:
+              [{name: worldPvc,             value: "{{inputs.parameters.worldPvc}}"},
+               {name: worldName,            value: "{{inputs.parameters.worldName}}"},
+               {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+               {name: volumeLocation,       value: "{{inputs.parameters.volumeLocation}}"},
+               {name: workingLocation,      value: "{{inputs.parameters.workingLocation}}"},
+               {name: logLocation,          value: "{{inputs.parameters.logLocation}}"},
+               {name: version,              value: "{{inputs.parameters.version}}"},
+               {name: reconName,            value: "{{inputs.parameters.reconName}}"},
+               {name: configFile,           value: "{{inputs.parameters.configFile}}"},
+               {name: retryCount,           value: "{{inputs.parameters.retryCount}}"},
+               {name: project,              value: "{{inputs.parameters.project}}"}]
+        - name: texture-mesh
+          template: texture-mesh
+          depends: reconstruct-mesh
+          arguments:
+            parameters:
+              [{name: worldPvc,             value: "{{inputs.parameters.worldPvc}}"},
+               {name: worldName,            value: "{{inputs.parameters.worldName}}"},
+               {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+               {name: volumeLocation,       value: "{{inputs.parameters.volumeLocation}}"},
+               {name: workingLocation,      value: "{{inputs.parameters.workingLocation}}"},
+               {name: logLocation,          value: "{{inputs.parameters.logLocation}}"},
+               {name: version,              value: "{{inputs.parameters.version}}"},
+               {name: reconName,            value: "{{inputs.parameters.reconName}}"},
+               {name: configFile,           value: "{{inputs.parameters.configFile}}"},
+               {name: retryCount,           value: "{{inputs.parameters.retryCount}}"},
+               {name: project,              value: "{{inputs.parameters.project}}"}]
+        - name: process-model
+          template: process-model
+          depends: texture-mesh
+          arguments:
+            parameters:
+              [{name: worldPvc,             value: "{{inputs.parameters.worldPvc}}"},
+               {name: worldName,            value: "{{inputs.parameters.worldName}}"},
+               {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+               {name: volumeLocation,       value: "{{inputs.parameters.volumeLocation}}"},
+               {name: workingLocation,      value: "{{inputs.parameters.workingLocation}}"},
+               {name: logLocation,          value: "{{inputs.parameters.logLocation}}"},
+               {name: version,              value: "{{inputs.parameters.version}}"},
+               {name: reconName,            value: "{{inputs.parameters.reconName}}"},
+               {name: configFile,           value: "{{inputs.parameters.configFile}}"},
+               {name: retryCount,           value: "{{inputs.parameters.retryCount}}"},
+               {name: project,              value: "{{inputs.parameters.project}}"}]
+        - name: project-sync-to-s3
+          template: project-sync-to-s3
+          #depends: process-model || process-model.Failed
+          depends: "track-and-reconstruct.Failed || undistort-and-export.Failed || densify.Failed || reconstruct-mesh.Failed || texture-mesh.Failed || process-model || process-model.Failed"
+          arguments:
+            parameters:
+              [{name: worldTempBucket,      value: "{{inputs.parameters.worldTempBucket}}"},
+               {name: worldName,            value: "{{inputs.parameters.worldName}}"},
+               {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+               {name: region,               value: "{{inputs.parameters.region}}"},
+               {name: workingLocation,      value: "{{inputs.parameters.workingLocation}}"},
+               {name: logLocation,          value: "{{inputs.parameters.logLocation}}"},
+               {name: version,              value: "{{inputs.parameters.version}}"},
+               {name: reconName,            value: "{{inputs.parameters.reconName}}"},
+               {name: configFile,           value: "{{inputs.parameters.configFile}}"},
+               {name: retryCount,           value: "{{inputs.parameters.retryCount}}"},
+               {name: project,              value: "{{inputs.parameters.project}}"}]
+        - name: tile-sync-to-s3
+          template: tile-sync-to-s3
+          depends: process-model
+          arguments:
+            parameters:
+              [{name: worldPipelineBucket,  value: "{{inputs.parameters.worldPipelineBucket}}"},
+               {name: worldTempBucket,      value: "{{inputs.parameters.worldTempBucket}}"},
+               {name: worldTileBucket,      value: "{{inputs.parameters.worldTileBucket}}"},
+               {name: worldPvc,             value: "{{inputs.parameters.worldPvc}}"},
+               {name: worldName,            value: "{{inputs.parameters.worldName}}"},
+               {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+               {name: region,               value: "{{inputs.parameters.region}}"},
+               {name: volumeLocation,       value: "{{inputs.parameters.volumeLocation}}"},
+               {name: workingLocation,      value: "{{inputs.parameters.workingLocation}}"},
+               {name: logLocation,          value: "{{inputs.parameters.logLocation}}"},
+               {name: version,              value: "{{inputs.parameters.version}}"},
+               {name: reconName,            value: "{{inputs.parameters.reconName}}"},
+               {name: configFile,           value: "{{inputs.parameters.configFile}}"},
+               {name: retryCount,           value: "{{inputs.parameters.retryCount}}"},
+               {name: project,              value: "{{inputs.parameters.project}}"}]
+  
+  - name: reconstruction-pre-align
+    inputs:
+      parameters:
+      - name: worldPipelineBucket
+      - name: worldTempBucket
+      - name: worldTileBucket
+      - name: worldPvc
+      - name: worldName
+      - name: imageRepo
+      - name: region
+      - name: volumeLocation
+      - name: workingLocation
+      - name: logLocation
+      - name: version
+      - name: reconName
+      - name: configFile
+      - name: retryCount
+      - name: project
+    dag:
+        tasks:
+        - name: track-and-reconstruct
+          template: track-and-reconstruct
+          arguments:
+            parameters:
+              [{name: worldPvc,             value: "{{inputs.parameters.worldPvc}}"},
+               {name: worldName,            value: "{{inputs.parameters.worldName}}"},
+               {name: worldPipelineBucket,  value: "{{inputs.parameters.worldPipelineBucket}}"},
+               {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+               {name: volumeLocation,       value: "{{inputs.parameters.volumeLocation}}"},
+               {name: workingLocation,      value: "{{inputs.parameters.workingLocation}}"},
+               {name: logLocation,          value: "{{inputs.parameters.logLocation}}"},
+               {name: version,              value: "{{inputs.parameters.version}}"},
+               {name: reconName,            value: "{{inputs.parameters.reconName}}"},
+               {name: configFile,           value: "{{inputs.parameters.configFile}}"},
+               {name: region,               value: "{{inputs.parameters.region}}"},
+               {name: retryCount,           value: "{{inputs.parameters.retryCount}}"},
+               {name: project,              value: "{{inputs.parameters.project}}"}]
+        - name: project-sync-to-s3
+          template: project-sync-to-s3
+          depends: "track-and-reconstruct.Failed"
+          arguments:
+            parameters:
+              [{name: worldTempBucket,      value: "{{inputs.parameters.worldTempBucket}}"},
+               {name: worldName,            value: "{{inputs.parameters.worldName}}"},
+               {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+               {name: region,               value: "{{inputs.parameters.region}}"},
+               {name: workingLocation,      value: "{{inputs.parameters.workingLocation}}"},
+               {name: logLocation,          value: "{{inputs.parameters.logLocation}}"},
+               {name: version,              value: "{{inputs.parameters.version}}"},
+               {name: reconName,            value: "{{inputs.parameters.reconName}}"},
+               {name: configFile,           value: "{{inputs.parameters.configFile}}"},
+               {name: retryCount,           value: "{{inputs.parameters.retryCount}}"},
+               {name: project,              value: "{{inputs.parameters.project}}"}]
+
+  - name: reconstruction-post-align
+    inputs:
+      parameters:
+      - name: worldPipelineBucket
+      - name: worldTempBucket
+      - name: worldTileBucket
+      - name: worldPvc
+      - name: worldName
+      - name: imageRepo
+      - name: region
+      - name: volumeLocation
+      - name: workingLocation
+      - name: logLocation
+      - name: version
+      - name: reconName
+      - name: configFile
+      - name: retryCount
+      - name: project
+    dag:
+        tasks:
+        - name: undistort-and-export
+          template: undistort-and-export
+          arguments:
+            parameters:
+              [{name: worldPvc,             value: "{{inputs.parameters.worldPvc}}"},
+               {name: worldPipelineBucket,  value: "{{inputs.parameters.worldPipelineBucket}}"},
+               {name: worldName,            value: "{{inputs.parameters.worldName}}"},
+               {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+               {name: region,               value: "{{inputs.parameters.region}}"},
+               {name: volumeLocation,       value: "{{inputs.parameters.volumeLocation}}"},
+               {name: workingLocation,      value: "{{inputs.parameters.workingLocation}}"},
+               {name: logLocation,          value: "{{inputs.parameters.logLocation}}"},
+               {name: version,              value: "{{inputs.parameters.version}}"},
+               {name: reconName,            value: "{{inputs.parameters.reconName}}"},
+               {name: configFile,           value: "{{inputs.parameters.configFile}}"},
+               {name: retryCount,           value: "{{inputs.parameters.retryCount}}"},
+               {name: project,              value: "{{inputs.parameters.project}}"}]
+        - name: densify
+          template: densify
+          depends: undistort-and-export
+          arguments:
+            parameters:
+              [{name: worldPvc,             value: "{{inputs.parameters.worldPvc}}"},
+               {name: worldName,            value: "{{inputs.parameters.worldName}}"},
+               {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+               {name: volumeLocation,       value: "{{inputs.parameters.volumeLocation}}"},
+               {name: workingLocation,      value: "{{inputs.parameters.workingLocation}}"},
+               {name: logLocation,          value: "{{inputs.parameters.logLocation}}"},
+               {name: version,              value: "{{inputs.parameters.version}}"},
+               {name: reconName,            value: "{{inputs.parameters.reconName}}"},
+               {name: configFile,           value: "{{inputs.parameters.configFile}}"},
+               {name: retryCount,           value: "{{inputs.parameters.retryCount}}"},
+               {name: project,              value: "{{inputs.parameters.project}}"}]
+        - name: reconstruct-mesh
+          template: reconstruct-mesh
+          depends: densify
+          arguments:
+            parameters:
+              [{name: worldPvc,             value: "{{inputs.parameters.worldPvc}}"},
+               {name: worldName,            value: "{{inputs.parameters.worldName}}"},
+               {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+               {name: volumeLocation,       value: "{{inputs.parameters.volumeLocation}}"},
+               {name: workingLocation,      value: "{{inputs.parameters.workingLocation}}"},
+               {name: logLocation,          value: "{{inputs.parameters.logLocation}}"},
+               {name: version,              value: "{{inputs.parameters.version}}"},
+               {name: reconName,            value: "{{inputs.parameters.reconName}}"},
+               {name: configFile,           value: "{{inputs.parameters.configFile}}"},
+               {name: retryCount,           value: "{{inputs.parameters.retryCount}}"},
+               {name: project,              value: "{{inputs.parameters.project}}"}]
+        - name: texture-mesh
+          template: texture-mesh
+          depends: reconstruct-mesh
+          arguments:
+            parameters:
+              [{name: worldPvc,             value: "{{inputs.parameters.worldPvc}}"},
+               {name: worldName,            value: "{{inputs.parameters.worldName}}"},
+               {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+               {name: volumeLocation,       value: "{{inputs.parameters.volumeLocation}}"},
+               {name: workingLocation,      value: "{{inputs.parameters.workingLocation}}"},
+               {name: logLocation,          value: "{{inputs.parameters.logLocation}}"},
+               {name: version,              value: "{{inputs.parameters.version}}"},
+               {name: reconName,            value: "{{inputs.parameters.reconName}}"},
+               {name: configFile,           value: "{{inputs.parameters.configFile}}"},
+               {name: retryCount,           value: "{{inputs.parameters.retryCount}}"},
+               {name: project,              value: "{{inputs.parameters.project}}"}]
+        - name: process-model
+          template: process-model
+          depends: texture-mesh
+          arguments:
+            parameters:
+              [{name: worldPvc,             value: "{{inputs.parameters.worldPvc}}"},
+               {name: worldName,            value: "{{inputs.parameters.worldName}}"},
+               {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+               {name: volumeLocation,       value: "{{inputs.parameters.volumeLocation}}"},
+               {name: workingLocation,      value: "{{inputs.parameters.workingLocation}}"},
+               {name: logLocation,          value: "{{inputs.parameters.logLocation}}"},
+               {name: version,              value: "{{inputs.parameters.version}}"},
+               {name: reconName,            value: "{{inputs.parameters.reconName}}"},
+               {name: configFile,           value: "{{inputs.parameters.configFile}}"},
+               {name: retryCount,           value: "{{inputs.parameters.retryCount}}"},
+               {name: project,              value: "{{inputs.parameters.project}}"}]
+        - name: lod-tileset
+          template: lod-tileset
+          depends: process-model
+          arguments:
+            parameters:
+              [{name: worldPvc,             value: "{{inputs.parameters.worldPvc}}"},
+               {name: worldName,            value: "{{inputs.parameters.worldName}}"},
+               {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+               {name: volumeLocation,       value: "{{inputs.parameters.volumeLocation}}"},
+               {name: workingLocation,      value: "{{inputs.parameters.workingLocation}}"},
+               {name: logLocation,          value: "{{inputs.parameters.logLocation}}"},
+               {name: version,              value: "{{inputs.parameters.version}}"},
+               {name: reconName,            value: "{{inputs.parameters.reconName}}"},
+               {name: configFile,           value: "{{inputs.parameters.configFile}}"},
+               {name: retryCount,           value: "{{inputs.parameters.retryCount}}"},
+               {name: project,              value: "{{inputs.parameters.project}}"}]
+        - name: project-sync-to-s3
+          template: project-sync-to-s3
+          depends: "undistort-and-export.Failed || densify.Failed || reconstruct-mesh.Failed || texture-mesh.Failed ||  process-model.Failed || lod-tileset || lod-tileset.Failed"
+          arguments:
+            parameters:
+              [{name: worldTempBucket,      value: "{{inputs.parameters.worldTempBucket}}"},
+               {name: worldName,            value: "{{inputs.parameters.worldName}}"},
+               {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+               {name: region,               value: "{{inputs.parameters.region}}"},
+               {name: workingLocation,      value: "{{inputs.parameters.workingLocation}}"},
+               {name: logLocation,          value: "{{inputs.parameters.logLocation}}"},
+               {name: version,              value: "{{inputs.parameters.version}}"},
+               {name: reconName,            value: "{{inputs.parameters.reconName}}"},
+               {name: configFile,           value: "{{inputs.parameters.configFile}}"},
+               {name: retryCount,           value: "{{inputs.parameters.retryCount}}"},
+               {name: project,              value: "{{inputs.parameters.project}}"}]
+        - name: tile-sync-to-s3
+          template: tile-sync-to-s3
+          #depends: process-model
+          depends: lod-tileset
+          arguments:
+            parameters:
+              [{name: worldPipelineBucket,  value: "{{inputs.parameters.worldPipelineBucket}}"},
+               {name: worldTempBucket,      value: "{{inputs.parameters.worldTempBucket}}"},
+               {name: worldTileBucket,      value: "{{inputs.parameters.worldTileBucket}}"},
+               {name: worldPvc,             value: "{{inputs.parameters.worldPvc}}"},
+               {name: worldName,            value: "{{inputs.parameters.worldName}}"},
+               {name: imageRepo,            value: "{{inputs.parameters.imageRepo}}"},
+               {name: region,               value: "{{inputs.parameters.region}}"},
+               {name: volumeLocation,       value: "{{inputs.parameters.volumeLocation}}"},
+               {name: workingLocation,      value: "{{inputs.parameters.workingLocation}}"},
+               {name: logLocation,          value: "{{inputs.parameters.logLocation}}"},
+               {name: version,              value: "{{inputs.parameters.version}}"},
+               {name: reconName,            value: "{{inputs.parameters.reconName}}"},
+               {name: configFile,           value: "{{inputs.parameters.configFile}}"},
+               {name: retryCount,           value: "{{inputs.parameters.retryCount}}"},
+               {name: project,              value: "{{inputs.parameters.project}}"}]
+  
+  - name: submodel-alignment
+    inputs:
+        parameters:
+        - name: worldPvc
+        - name: worldName
+        - name: imageRepo
+        - name: volumeLocation
+        - name: workingLocation
+        - name: logLocation
+        - name: version
+        - name: reconName
+        - name: reconId
+        - name: configFile
+        - name: retryCount
+        - name: cpuCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: zone-cpu-cores
+        - name: memCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: zone-cpu-ram
+    retryStrategy:
+      limit: "{{inputs.parameters.retryCount}}"
+      retryPolicy: OnError
+    podSpecPatch: |
+      containers:
+        - name: main
+          resources:
+            requests:
+              cpu: "{{inputs.parameters.cpuCount}}"
+            # limits:
+            #   memory: "{{inputs.parameters.memCount}}"
+    script:
+        image: "{{inputs.parameters.imageRepo}}/cpu_tasks:{{inputs.parameters.version}}"
+        command: [bash]
+        source: | 
+            set -eo pipefail
+            mkdir -p "{{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/{{inputs.parameters.logLocation}}"
+            exec > >(tee -a {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/{{inputs.parameters.logLocation}}/{{workflow.name}}_submodel_alignment.log) 2>&1
+            cd {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}
+
+            start_time=$(date -u +%s)
+              echo opensfm align_submodels pwd=$(pwd)
+              sfm-utils profile --profiling.path {{workflow.name}}_alignment.csv --load recon_config.json opensfm align_submodels .
+
+              # Increment step
+              world_id=$(curl -s -X 'GET' 'http://bda-tiledb-ws.bda:8080/world' -H 'accept: */*' | jq -r '.[] | select(.name == "{{inputs.parameters.worldName}}") | .id')
+              response=$(curl -X 'PUT' 'http://bda-tiledb-ws.bda:8080/reconstruction/{{inputs.parameters.reconId}}/step' -w "%{http_code}" -s -o status.json -H 'Content-Type: application/json')
+              if [ "$response" -ne 200 ]; then
+                echo "Reconstruction {{inputs.parameters.reconName}} with id {{inputs.parameters.reconId}} had http response code "$response""
+                exit "$response"
+              fi
+              step=$(jq '{id,name,world,completedSteps,totalSteps} + {"currentStep": "submodel-alignment"}' status.json)
+              mosquitto_pub -h 'mosquitto-mqtts.bda' -t world/$world_id/reconstruction/{{inputs.parameters.reconId}} -m "$step"
+            end_time=$(date -u +%s)
+            
+            duration=$((end_time - start_time))
+            formatted_duration=$(printf "%d:%02d:%02d" "$((duration / 3600))" "$(((duration % 3600) / 60))" "$((duration % 60))")
+            echo submodel-alignment,, $(date +"%Y-%m-%d %H:%M:%S" -ud "@$start_time"), $(date +"%Y-%m-%d %H:%M:%S" -ud "@$end_time"), $formatted_duration >> {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/{{inputs.parameters.logLocation}}/{{workflow.name}}_times.csv
+        volumeMounts:
+        - name: workdir
+          mountPath: "{{inputs.parameters.workingLocation}}"
+        - name: volumedir
+          mountPath: "{{inputs.parameters.volumeLocation}}"
+    tolerations:
+    - key: "s3gis.be/pool"
+      operator: "Equal"
+      value: "zone-cpu"
+      effect: "NoSchedule"
+    nodeSelector:
+      node-type: zone-cpu
+    synchronization:
+      semaphore:
+        configMapKeyRef:
+          name:  "{{workflow.parameters.worldConfig}}"
+          key: zone-cpu-limit
+    volumes:
+      - name: volumedir
+        persistentVolumeClaim:
+          claimName: "{{inputs.parameters.worldPvc}}"
+    metadata:
+      labels:
+        world: "{{inputs.parameters.worldName}}"
+        workflow: "{{workflow.name}}"
+
+  - name: track-and-reconstruct
+    inputs:
+        parameters:
+        - name: worldPvc
+        - name: worldName
+        - name: imageRepo
+        - name: volumeLocation
+        - name: workingLocation
+        - name: logLocation
+        - name: version
+        - name: reconName
+        - name: configFile
+        - name: retryCount
+        - name: project
+        - name: cpuCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: zone-cpu-cores
+        - name: memCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: zone-cpu-ram
+    retryStrategy:
+      limit: "{{inputs.parameters.retryCount}}"
+      retryPolicy: OnError
+    podSpecPatch: |
+      containers:
+        - name: main
+          resources:
+            requests:
+              cpu: "{{inputs.parameters.cpuCount}}"
+            # limits:
+            #   memory: "{{inputs.parameters.memCount}}"
+    script:
+        image: "{{inputs.parameters.imageRepo}}/cpu_tasks:{{inputs.parameters.version}}"
+        command: [bash]
+        source: | 
+            set -eo pipefail
+            project_folder=$(jq -r '.projectBuilder.out' "{{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/{{inputs.parameters.configFile}}")
+            project_name=$(echo "{{inputs.parameters.project}}" | sed 's/\//_/g')
+            mkdir -p "{{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/$project_folder/{{inputs.parameters.project}}/{{inputs.parameters.logLocation}}"
+            exec > >(tee -a {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/$project_folder/{{inputs.parameters.project}}/{{inputs.parameters.logLocation}}/{{workflow.name}}_${project_name}_track_and_reconstruct.log) 2>&1
+            cd "{{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/$project_folder/{{inputs.parameters.project}}"
+
+            start_time=$(date -u +%s)
+              echo Copying config for {{inputs.parameters.reconName}} to project {{inputs.parameters.project}}
+              cp -v {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/recon_config.json {{inputs.parameters.configFile}}
+              sfm-utils create-opensfm-configs --proc-count {{inputs.parameters.cpuCount}} --load {{inputs.parameters.configFile}}
+              echo Copying sfm project files from Pipeline to {{inputs.parameters.project}}
+              cp -v {{inputs.parameters.volumeLocation}}/camera_models.json camera_models.json
+
+              echo Copying reference_lla.json to {{inputs.parameters.project}}
+              cp -v {{inputs.parameters.volumeLocation}}/reference_lla.json reference_lla.json
+
+              echo opensfm create_tracks .
+              sfm-utils profile --profiling.path {{workflow.name}}_create_tracks.csv --load {{inputs.parameters.configFile}} opensfm create_tracks .
+            end_time=$(date -u +%s)
+            duration=$((end_time - start_time))
+            formatted_duration=$(printf "%d:%02d:%02d" "$((duration / 3600))" "$(((duration % 3600) / 60))" "$((duration % 60))")
+            echo create-tracks, {{inputs.parameters.project}}, $(date +"%Y-%m-%d %H:%M:%S" -ud "@$start_time"), $(date +"%Y-%m-%d %H:%M:%S" -ud "@$end_time"), $formatted_duration >> {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/{{inputs.parameters.logLocation}}/{{workflow.name}}_times.csv
+            
+            start_time=$(date -u +%s)
+              echo opensfm reconstruct .
+              sfm-utils profile --profiling.path {{workflow.name}}_reconstruct.csv --load {{inputs.parameters.configFile}} opensfm reconstruct .
+            end_time=$(date -u +%s)
+            duration=$((end_time - start_time))
+            formatted_duration=$(printf "%d:%02d:%02d" "$((duration / 3600))" "$(((duration % 3600) / 60))" "$((duration % 60))")
+            echo reconstruct, {{inputs.parameters.project}}, $(date +"%Y-%m-%d %H:%M:%S" -ud "@$start_time"), $(date +"%Y-%m-%d %H:%M:%S" -ud "@$end_time"), $formatted_duration >> {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/{{inputs.parameters.logLocation}}/{{workflow.name}}_times.csv
+        volumeMounts:
+        - name: workdir
+          mountPath: "{{inputs.parameters.workingLocation}}"
+        - name: volumedir
+          mountPath: "{{inputs.parameters.volumeLocation}}"
+    tolerations:
+    - key: "s3gis.be/pool"
+      operator: "Equal"
+      value: "zone-cpu"
+      effect: "NoSchedule"
+    nodeSelector:
+      node-type: zone-cpu
+    synchronization:
+      semaphore:
+        configMapKeyRef:
+          name:  "{{workflow.parameters.worldConfig}}"
+          key: zone-cpu-limit
+    volumes:
+      - name: volumedir
+        persistentVolumeClaim:
+          claimName: "{{inputs.parameters.worldPvc}}"
+    metadata:
+      labels:
+        world: "{{inputs.parameters.worldName}}"
+        workflow: "{{workflow.name}}"
+
+  - name: undistort-and-export
+    inputs:
+        parameters:
+        - name: worldPipelineBucket
+        - name: worldPvc
+        - name: worldName
+        - name: imageRepo
+        - name: volumeLocation
+        - name: workingLocation
+        - name: logLocation
+        - name: version
+        - name: reconName
+        - name: configFile
+        - name: retryCount
+        - name: project
+        - name: region
+        - name: cpuCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: zone-cpu-cores
+        - name: memCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: zone-cpu-ram
+    retryStrategy:
+      limit: "{{inputs.parameters.retryCount}}"
+      retryPolicy: OnError
+    podSpecPatch: |
+      containers:
+        - name: main
+          resources:
+            requests:
+              cpu: "{{inputs.parameters.cpuCount}}"
+            # limits:
+            #   memory: "{{inputs.parameters.memCount}}"
+    script:
+        image: "{{inputs.parameters.imageRepo}}/cpu_tasks:{{inputs.parameters.version}}"
+        command: [bash]
+        source: | 
+            set -eo pipefail
+            project_folder=$(jq -r '.projectBuilder.out' "{{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/{{inputs.parameters.configFile}}")
+            project_name=$(echo "{{inputs.parameters.project}}" | sed 's/\//_/g')
+            mkdir -p "{{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/$project_folder/{{inputs.parameters.project}}/{{inputs.parameters.logLocation}}"
+            exec > >(tee -a {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/$project_folder/{{inputs.parameters.project}}/{{inputs.parameters.logLocation}}/{{workflow.name}}_${project_name}_undistort.log) 2>&1
+            cd "{{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/$project_folder/{{inputs.parameters.project}}"
+            
+            start_time=$(date -u +%s)
+              if [[ -f reconstruction.aligned.json ]]; then 
+                echo 'Switching to aligned submodel reconstruction'
+                mv reconstruction.json reconstruction.orig.json
+                mv reconstruction.aligned.json reconstruction.json
+              else
+                echo 'No aligned reconstruction found.'
+              fi
+              echo 'opensfm export_geocoords . --proj "+proj=geocent +datum=WGS84 +units=m +no_defs" --reconstruction'
+              opensfm export_geocoords . --proj "+proj=geocent +datum=WGS84 +units=m +no_defs" --reconstruction
+            end_time=$(date -u +%s)
+            duration=$((end_time - start_time))
+            formatted_duration=$(printf "%d:%02d:%02d" "$((duration / 3600))" "$(((duration % 3600) / 60))" "$((duration % 60))")
+            echo export-geocoords, {{inputs.parameters.project}}, $(date +"%Y-%m-%d %H:%M:%S" -ud "@$start_time"), $(date +"%Y-%m-%d %H:%M:%S" -ud "@$end_time"), $formatted_duration >> {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/{{inputs.parameters.logLocation}}/{{workflow.name}}_times.csv
+            
+            start_time=$(date -u +%s)
+              echo Selecting starting points
+              echo python3 /src/bda-gpx-utils/gpx-zone-starting-points.py -i reconstruction.geocoords.json -c {{inputs.parameters.volumeLocation}}/{{inputs.parameters.configFile}}
+              python3 /src/bda-gpx-utils/gpx-zone-starting-points.py -i reconstruction.geocoords.json -c {{inputs.parameters.volumeLocation}}/{{inputs.parameters.configFile}} 
+              aws s3 cp --region {{inputs.parameters.region}} startingpoints.gpx s3://{{inputs.parameters.worldPipelineBucket}}/starting_points/{{inputs.parameters.project}}/
+            end_time=$(date -u +%s)
+            duration=$((end_time - start_time))
+            formatted_duration=$(printf "%d:%02d:%02d" "$((duration / 3600))" "$(((duration % 3600) / 60))" "$((duration % 60))")
+            echo gpx-zone-starting-points, {{inputs.parameters.project}}, $(date +"%Y-%m-%d %H:%M:%S" -ud "@$start_time"), $(date +"%Y-%m-%d %H:%M:%S" -ud "@$end_time"), $formatted_duration >> {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/{{inputs.parameters.logLocation}}/{{workflow.name}}_times.csv
+
+            start_time=$(date -u +%s)
+              echo opensfm undistort . --reconstruction reconstruction.geocoords.json
+              sfm-utils profile --profiling.path {{workflow.name}}_undistort.csv --load {{inputs.parameters.configFile}} opensfm undistort . --reconstruction reconstruction.geocoords.json
+            end_time=$(date -u +%s)
+            duration=$((end_time - start_time))
+            formatted_duration=$(printf "%d:%02d:%02d" "$((duration / 3600))" "$(((duration % 3600) / 60))" "$((duration % 60))")
+            echo undistort, {{inputs.parameters.project}}, $(date +"%Y-%m-%d %H:%M:%S" -ud "@$start_time"), $(date +"%Y-%m-%d %H:%M:%S" -ud "@$end_time"), $formatted_duration >> {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/{{inputs.parameters.logLocation}}/{{workflow.name}}_times.csv
+            
+            # We may want to add this back in later if we find we need it.  Keeping as comment for now.
+            # start_time=$(date -u +%s)
+            #   echo opensfm export_visualsfm .
+            #   opensfm export_visualsfm .
+            # end_time=$(date -u +%s)
+            # duration=$((end_time - start_time))
+            # formatted_duration=$(printf "%d:%02d:%02d" "$((duration / 3600))" "$(((duration % 3600) / 60))" "$((duration % 60))")
+            # echo export-visualsfm, {{inputs.parameters.project}}, $(date +"%Y-%m-%d %H:%M:%S" -ud "@$start_time"), $(date +"%Y-%m-%d %H:%M:%S" -ud "@$end_time"), $formatted_duration >> {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/{{inputs.parameters.logLocation}}/{{workflow.name}}_times.csv
+
+            start_time=$(date -u +%s)
+              echo opensfm export_openmvs . --corrections_file openmvs_modifications.json
+              sfm-utils profile --profiling.path {{workflow.name}}_export_openmvs.csv --load {{inputs.parameters.configFile}} opensfm export_openmvs . --corrections_file openmvs_modifications.json
+            end_time=$(date -u +%s)
+            duration=$((end_time - start_time))
+            formatted_duration=$(printf "%d:%02d:%02d" "$((duration / 3600))" "$(((duration % 3600) / 60))" "$((duration % 60))")
+            echo export-openmvs, {{inputs.parameters.project}}, $(date +"%Y-%m-%d %H:%M:%S" -ud "@$start_time"), $(date +"%Y-%m-%d %H:%M:%S" -ud "@$end_time"), $formatted_duration >> {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/{{inputs.parameters.logLocation}}/{{workflow.name}}_times.csv
+        volumeMounts:
+        - name: workdir
+          mountPath: "{{inputs.parameters.workingLocation}}"
+        - name: volumedir
+          mountPath: "{{inputs.parameters.volumeLocation}}"
+    tolerations:
+    - key: "s3gis.be/pool"
+      operator: "Equal"
+      value: "zone-cpu"
+      effect: "NoSchedule"
+    nodeSelector:
+      node-type: zone-cpu
+    synchronization:
+      semaphore:
+        configMapKeyRef:
+          name:  "{{workflow.parameters.worldConfig}}"
+          key: zone-cpu-limit
+    volumes:
+      - name: volumedir
+        persistentVolumeClaim:
+          claimName: "{{inputs.parameters.worldPvc}}"
+    metadata:
+      labels:
+        world: "{{inputs.parameters.worldName}}"
+        workflow: "{{workflow.name}}"
+  
+  - name: densify
+    inputs:
+        parameters:
+        - name: worldPvc
+        - name: worldName
+        - name: imageRepo
+        - name: volumeLocation
+        - name: workingLocation
+        - name: logLocation
+        - name: version
+        - name: reconName
+        - name: configFile
+        - name: retryCount
+        - name: project
+        - name: cpuCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: zone-gpu-cores
+        - name: memCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: zone-gpu-ram
+    retryStrategy:
+      limit: "{{inputs.parameters.retryCount}}"
+      retryPolicy: OnError
+    podSpecPatch: |
+      containers:
+        - name: main
+          resources:
+            requests:
+              cpu: "{{inputs.parameters.cpuCount}}"
+            # limits:
+            #   memory: "{{inputs.parameters.memCount}}"
+    script:
+        image: "{{inputs.parameters.imageRepo}}/gpu_tasks:{{inputs.parameters.version}}"
+        command: [bash]
+        source: | 
+            set -eo pipefail
+            project_folder=$(jq -r '.projectBuilder.out' "{{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/{{inputs.parameters.configFile}}")
+            project_name=$(echo "{{inputs.parameters.project}}" | sed 's/\//_/g')
+            mkdir -p "{{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/$project_folder/{{inputs.parameters.project}}/{{inputs.parameters.logLocation}}"
+            exec > >(tee -a {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/$project_folder/{{inputs.parameters.project}}/{{inputs.parameters.logLocation}}/{{workflow.name}}_${project_name}_densify.log) 2>&1
+            cd "{{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/$project_folder/{{inputs.parameters.project}}"
+            
+            start_time=$(date -u +%s)
+              echo DensifyPointCloud --ignore-mask-label 0 --remove-dmaps 1 --roi-border -12.5 --crop-to-roi 1 --postprocess-dmaps 6 --max-threads {{inputs.parameters.cpuCount}} -i undistorted/openmvs/scene.mvs
+              sfm-utils profile --profiling.path {{workflow.name}}_densify.csv --load {{inputs.parameters.configFile}} DensifyPointCloud --ignore-mask-label 0 --remove-dmaps 1 --roi-border -12.5 --crop-to-roi 1 --postprocess-dmaps 6 --max-threads {{inputs.parameters.cpuCount}} -i undistorted/openmvs/scene.mvs
+              mv -v DensifyPointCloud*.log logs/
+            end_time=$(date -u +%s)
+            duration=$((end_time - start_time))
+            formatted_duration=$(printf "%d:%02d:%02d" "$((duration / 3600))" "$(((duration % 3600) / 60))" "$((duration % 60))")
+            echo densify, {{inputs.parameters.project}}, $(date +"%Y-%m-%d %H:%M:%S" -ud "@$start_time"), $(date +"%Y-%m-%d %H:%M:%S" -ud "@$end_time"), $formatted_duration >> {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/{{inputs.parameters.logLocation}}/{{workflow.name}}_times.csv
+        volumeMounts:
+        - name: workdir
+          mountPath: "{{inputs.parameters.workingLocation}}"
+        - name: volumedir
+          mountPath: "{{inputs.parameters.volumeLocation}}"
+    tolerations:
+    - key: "s3gis.be/pool"
+      operator: "Equal"
+      value: "zone-gpu"
+      effect: "NoSchedule"
+    nodeSelector:
+      node-type: zone-gpu
+    synchronization:
+      semaphore:
+        configMapKeyRef:
+          name:  "{{workflow.parameters.worldConfig}}"
+          key: zone-gpu-limit
+    volumes:
+      - name: volumedir
+        persistentVolumeClaim:
+          claimName: "{{inputs.parameters.worldPvc}}"
+    metadata:
+      labels:
+        world: "{{inputs.parameters.worldName}}"
+        workflow: "{{workflow.name}}"
+
+  - name: reconstruct-mesh
+    inputs:
+        parameters:
+        - name: worldPvc
+        - name: worldName
+        - name: imageRepo
+        - name: volumeLocation
+        - name: workingLocation
+        - name: logLocation
+        - name: version
+        - name: reconName
+        - name: configFile
+        - name: retryCount
+        - name: project
+        - name: cpuCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: zone-cpu-cores
+        - name: memCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: zone-cpu-ram
+    retryStrategy:
+      limit: "{{inputs.parameters.retryCount}}"
+      retryPolicy: OnError
+    podSpecPatch: |
+      containers:
+        - name: main
+          resources:
+            requests:
+              cpu: "{{inputs.parameters.cpuCount}}"
+            # limits:
+            #   memory: "{{inputs.parameters.memCount}}"
+    script:
+        image: "{{inputs.parameters.imageRepo}}/cpu_tasks:{{inputs.parameters.version}}"
+        command: [bash]
+        source: | 
+            set -eo pipefail
+            project_folder=$(jq -r '.projectBuilder.out' "{{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/{{inputs.parameters.configFile}}")
+            project_name=$(echo "{{inputs.parameters.project}}" | sed 's/\//_/g')
+            mkdir -p "{{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/$project_folder/{{inputs.parameters.project}}/{{inputs.parameters.logLocation}}"
+            exec > >(tee -a {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/$project_folder/{{inputs.parameters.project}}/{{inputs.parameters.logLocation}}/{{workflow.name}}_${project_name}_reconstruct_mesh.log) 2>&1
+            cd "{{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/$project_folder/{{inputs.parameters.project}}"
+            
+            start_time=$(date -u +%s)
+              echo ReconstructMesh --thickness-factor 0.25 --roi-border -0.5 --crop-to-roi 1 --max-threads {{inputs.parameters.cpuCount}} -i undistorted/openmvs/scene_dense.mvs
+              sfm-utils profile --profiling.path {{workflow.name}}_reconstructmesh.csv --load {{inputs.parameters.configFile}} ReconstructMesh --thickness-factor 0.25 --roi-border -0.5 --crop-to-roi 1 --max-threads {{inputs.parameters.cpuCount}} -i undistorted/openmvs/scene_dense.mvs
+              mv -v ReconstructMesh*.log logs/
+            end_time=$(date -u +%s)
+            duration=$((end_time - start_time))
+            formatted_duration=$(printf "%d:%02d:%02d" "$((duration / 3600))" "$(((duration % 3600) / 60))" "$((duration % 60))")
+            echo reconstruct-mesh, {{inputs.parameters.project}}, $(date +"%Y-%m-%d %H:%M:%S" -ud "@$start_time"), $(date +"%Y-%m-%d %H:%M:%S" -ud "@$end_time"), $formatted_duration >> {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/{{inputs.parameters.logLocation}}/{{workflow.name}}_times.csv
+        volumeMounts:
+        - name: workdir
+          mountPath: "{{inputs.parameters.workingLocation}}"
+        - name: volumedir
+          mountPath: "{{inputs.parameters.volumeLocation}}"
+    tolerations:
+    - key: "s3gis.be/pool"
+      operator: "Equal"
+      value: "zone-cpu"
+      effect: "NoSchedule"
+    nodeSelector:
+      node-type: zone-cpu
+    synchronization:
+      semaphore:
+        configMapKeyRef:
+          name:  "{{workflow.parameters.worldConfig}}"
+          key: zone-cpu-limit
+    volumes:
+      - name: volumedir
+        persistentVolumeClaim:
+          claimName: "{{inputs.parameters.worldPvc}}"
+    metadata:
+      labels:
+        world: "{{inputs.parameters.worldName}}"
+        workflow: "{{workflow.name}}"
+
+  - name: texture-mesh
+    inputs:
+        parameters:
+        - name: worldPvc
+        - name: worldName
+        - name: imageRepo
+        - name: volumeLocation
+        - name: workingLocation
+        - name: logLocation
+        - name: version
+        - name: reconName
+        - name: configFile
+        - name: retryCount
+        - name: project
+        - name: cpuCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: zone-cpu-cores
+        - name: memCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: zone-cpu-ram
+    retryStrategy:
+      limit: "{{inputs.parameters.retryCount}}"
+      retryPolicy: OnError
+    podSpecPatch: |
+      containers:
+        - name: main
+          resources:
+            requests:
+              cpu: "{{inputs.parameters.cpuCount}}"
+            # limits:
+            #   memory: "{{inputs.parameters.memCount}}"
+    script:
+        image: "{{inputs.parameters.imageRepo}}/cpu_tasks:{{inputs.parameters.version}}"
+        command: [bash]
+        source: | 
+            set -eo pipefail
+            project_folder=$(jq -r '.projectBuilder.out' "{{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/{{inputs.parameters.configFile}}")
+            project_name=$(echo "{{inputs.parameters.project}}" | sed 's/\//_/g')
+            mkdir -p "{{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/$project_folder/{{inputs.parameters.project}}/{{inputs.parameters.logLocation}}"
+            exec > >(tee -a {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/$project_folder/{{inputs.parameters.project}}/{{inputs.parameters.logLocation}}/{{workflow.name}}_${project_name}_texture_mesh.log) 2>&1
+            cd "{{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/$project_folder/{{inputs.parameters.project}}"
+            
+            start_time=$(date -u +%s)
+              # Create the masks
+              masks_folder=$(jq -r '.masksFolder' config.json)
+              pushd images
+                for img in *.png; do 
+                  imgFile=${img%.*}
+                  ln -sf $masks_folder/$imgFile.png.png $imgFile.mask.png
+                done
+              popd
+            
+              echo TextureMesh --decimate 0.2 --empty-color 8421504 --ignore-mask-label 0 --export-type obj --max-threads {{inputs.parameters.cpuCount}} -i undistorted/openmvs/scene_dense_mesh.mvs
+              sfm-utils profile --profiling.path {{workflow.name}}_texturemesh.csv --load {{inputs.parameters.configFile}} TextureMesh --decimate 0.2 --empty-color 8421504 --ignore-mask-label 0 --export-type obj --max-threads {{inputs.parameters.cpuCount}} -i undistorted/openmvs/scene_dense_mesh.mvs
+              mv -v TextureMesh*.log logs/
+
+              # And remove them (since opensfm tracking doesn't like them in the same folder)
+              pushd images
+                rm -f *.mask.png
+              popd
+            end_time=$(date -u +%s)
+            duration=$((end_time - start_time))
+            formatted_duration=$(printf "%d:%02d:%02d" "$((duration / 3600))" "$(((duration % 3600) / 60))" "$((duration % 60))")
+            echo texture-mesh, {{inputs.parameters.project}}, $(date +"%Y-%m-%d %H:%M:%S" -ud "@$start_time"), $(date +"%Y-%m-%d %H:%M:%S" -ud "@$end_time"), $formatted_duration >> {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/{{inputs.parameters.logLocation}}/{{workflow.name}}_times.csv
+
+            # LOD pipeline
+            if [ -e "undistorted/openmvs/scene_dense_mesh_texture.mvs" ]; then
+              start_time=$(date -u +%s)
+                echo sfm-utils lod-chain --load {{inputs.parameters.configFile}} -i "undistorted/openmvs/"
+                sfm-utils lod-chain --load {{inputs.parameters.configFile}} -i "undistorted/openmvs/"
+                # Conditional move (doesn't trigger an error when empty)
+                for X in TextureMesh*.log; do [[ -e $X ]] && mv -v "$X" logs/; done
+              end_time=$(date -u +%s)
+              duration=$((end_time - start_time))
+              formatted_duration=$(printf "%d:%02d:%02d" "$((duration / 3600))" "$(((duration % 3600) / 60))" "$((duration % 60))")
+              echo lod-chain, {{inputs.parameters.project}}, $(date +"%Y-%m-%d %H:%M:%S" -ud "@$start_time"), $(date +"%Y-%m-%d %H:%M:%S" -ud "@$end_time"), $formatted_duration >> {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/{{inputs.parameters.logLocation}}/{{workflow.name}}_times.csv
+            else
+              echo "TextureMesh did not complete, skipping LOD chain."
+            fi
+        volumeMounts:
+        - name: workdir
+          mountPath: "{{inputs.parameters.workingLocation}}"
+        - name: volumedir
+          mountPath: "{{inputs.parameters.volumeLocation}}"
+    tolerations:
+    - key: "s3gis.be/pool"
+      operator: "Equal"
+      value: "zone-cpu"
+      effect: "NoSchedule"
+    nodeSelector:
+      node-type: zone-cpu
+    synchronization:
+      semaphore:
+        configMapKeyRef:
+          name:  "{{workflow.parameters.worldConfig}}"
+          key: zone-cpu-limit
+    volumes:
+      - name: volumedir
+        persistentVolumeClaim:
+          claimName: "{{inputs.parameters.worldPvc}}"
+    metadata:
+      labels:
+        world: "{{inputs.parameters.worldName}}"
+        workflow: "{{workflow.name}}"
+
+  - name: process-model
+    inputs:
+        parameters:
+        - name: worldPvc
+        - name: worldName
+        - name: imageRepo
+        - name: volumeLocation
+        - name: workingLocation
+        - name: logLocation
+        - name: version
+        - name: reconName
+        - name: configFile
+        - name: retryCount
+        - name: project
+        - name: cpuCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: zone-cpu-cores
+        - name: memCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: zone-cpu-ram
+    retryStrategy:
+      limit: "{{inputs.parameters.retryCount}}"
+      retryPolicy: OnError
+    podSpecPatch: |
+      containers:
+        - name: main
+          resources:
+            requests:
+              cpu: "{{inputs.parameters.cpuCount}}"
+            # limits:
+            #   memory: "{{inputs.parameters.memCount}}"
+    script:
+        image: "{{inputs.parameters.imageRepo}}/cpu_tasks:{{inputs.parameters.version}}"
+        command: [bash]
+        source: | 
+            set -eo pipefail
+
+            project_folder=$(jq -r '.projectBuilder.out' "{{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/{{inputs.parameters.configFile}}")
+            project_name=$(echo "{{inputs.parameters.project}}" | sed 's/\//_/g')
+            mkdir -p "{{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/$project_folder/{{inputs.parameters.project}}/{{inputs.parameters.logLocation}}"
+            exec > >(tee -a {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/$project_folder/{{inputs.parameters.project}}/{{inputs.parameters.logLocation}}/{{workflow.name}}_${project_name}_process_model.log) 2>&1
+            cd "{{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/$project_folder/{{inputs.parameters.project}}"
+
+            ###TEMP used when running only this step since config is generated in first step###
+            #cp -v {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/recon_config.json {{inputs.parameters.configFile}}
+
+            return_value=0
+            #common config settings
+            glb_filename=$(jq -r '.processModel.name' {{inputs.parameters.configFile}})
+            export_type=$(jq -r '.lod.exportType' {{inputs.parameters.configFile}})
+            source_filename=$(jq -r '.lod.sourceMvsSceneFilename' {{inputs.parameters.configFile}})
+            lod_postfix=$(jq -r '.lod.appendStringFormatter' {{inputs.parameters.configFile}})
+            lod_string=${lod_postfix%%\%*}
+            
+            start_time=$(date -u +%s)
+              echo "Processing Leaf node."
+              echo sfm-utils process-model -i undistorted/openmvs/scene_dense_mesh_texture.obj --load {{inputs.parameters.configFile}}
+              sfm-utils process-model -i undistorted/openmvs/scene_dense_mesh_texture.obj --load {{inputs.parameters.configFile}}
+              
+              echo "Processing LOD nodes."
+              source_name="${source_filename%.*}"
+              for scene_path in undistorted/openmvs/$source_name*$lod_string*.$export_type; do
+                scene_file_name=$(basename ${scene_path%.*})
+                #lod_suffix=${scene_file_name:24:6}
+                lod_suffix=${scene_file_name#$source_name}
+                echo sfm-utils process-model -i $scene_path --load {{inputs.parameters.configFile}} -o $glb_filename$lod_suffix
+                sfm-utils process-model -i $scene_path --load {{inputs.parameters.configFile}} -o $glb_filename$lod_suffix
+              done
+            end_time=$(date -u +%s)
+            duration=$((end_time - start_time))
+            formatted_duration=$(printf "%d:%02d:%02d" "$((duration / 3600))" "$(((duration % 3600) / 60))" "$((duration % 60))")
+            echo process-model, {{inputs.parameters.project}}, $(date +"%Y-%m-%d %H:%M:%S" -ud "@$start_time"), $(date +"%Y-%m-%d %H:%M:%S" -ud "@$end_time"), $formatted_duration >> {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/{{inputs.parameters.logLocation}}/{{workflow.name}}_times.csv
+
+            start_time=$(date -u +%s)
+              if [ -e undistorted/openmvs/"$glb_filename".glb ]; then
+                echo "Create tileset.json for local models"
+                echo sfm-utils tileset-for-model -i undistorted/openmvs/"$glb_filename".glb -o undistorted/openmvs/tileset_local.json --load {{inputs.parameters.configFile}}
+                sfm-utils tileset-for-model -i undistorted/openmvs/"$glb_filename".glb -o undistorted/openmvs/tileset_local.json --load {{inputs.parameters.configFile}}
+
+                echo "Create tileset.json for tiles uploaded"
+                echo sfm-utils tileset-for-model -i "$glb_filename".glb --load {{inputs.parameters.configFile}}
+                sfm-utils tileset-for-model -i "$glb_filename".glb --load {{inputs.parameters.configFile}}
+
+                echo "Copying tilesets to pipeline"
+                tileset_file=$(jq -r '.tilesetForModel.out' {{inputs.parameters.configFile}})
+                tiles_folder=$(jq -r '.tilesFolder' {{inputs.parameters.configFile}})
+                project_folder=$(jq -r '.projectBuilder.out' {{inputs.parameters.configFile}})
+                cd "{{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/$project_folder"
+                mkdir -p "{{inputs.parameters.volumeLocation}}/$tiles_folder"
+                cp -v --parents "{{inputs.parameters.project}}/$tileset_file" "{{inputs.parameters.volumeLocation}}/$tiles_folder"
+
+                echo "Copying lods to pipeline"
+                cd "{{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/$project_folder/{{inputs.parameters.project}}"
+                mkdir -p "{{inputs.parameters.volumeLocation}}/$tiles_folder/{{inputs.parameters.project}}/"
+                cp -v undistorted/openmvs/$source_name*.$export_type "{{inputs.parameters.volumeLocation}}/$tiles_folder/{{inputs.parameters.project}}/"
+                cp -v undistorted/openmvs/$source_name*.mtl "{{inputs.parameters.volumeLocation}}/$tiles_folder/{{inputs.parameters.project}}/"
+                cp -v undistorted/openmvs/$source_name*.jpg "{{inputs.parameters.volumeLocation}}/$tiles_folder/{{inputs.parameters.project}}/"
+              else
+                echo "$glb_filename".glb does not exist so skipping tileset.json creation.
+                return_value=1
+              fi
+            end_time=$(date -u +%s)
+            duration=$((end_time - start_time))
+            formatted_duration=$(printf "%d:%02d:%02d" "$((duration / 3600))" "$(((duration % 3600) / 60))" "$((duration % 60))")
+            echo tileset-for-model, {{inputs.parameters.project}}, $(date +"%Y-%m-%d %H:%M:%S" -ud "@$start_time"), $(date +"%Y-%m-%d %H:%M:%S" -ud "@$end_time"), $formatted_duration >> {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/{{inputs.parameters.logLocation}}/{{workflow.name}}_times.csv
+            exit $return_value
+        volumeMounts:
+        - name: workdir
+          mountPath: "{{inputs.parameters.workingLocation}}"
+        - name: volumedir
+          mountPath: "{{inputs.parameters.volumeLocation}}"
+    tolerations:
+    - key: "s3gis.be/pool"
+      operator: "Equal"
+      value: "zone-cpu"
+      effect: "NoSchedule"
+    nodeSelector:
+      node-type: zone-cpu
+    synchronization:
+      semaphore:
+        configMapKeyRef:
+          name:  "{{workflow.parameters.worldConfig}}"
+          key: zone-cpu-limit
+    volumes:
+      - name: volumedir
+        persistentVolumeClaim:
+          claimName: "{{inputs.parameters.worldPvc}}"
+    metadata:
+      labels:
+        world: "{{inputs.parameters.worldName}}"
+        workflow: "{{workflow.name}}"
+
+  - name: lod-tileset
+    inputs:
+        parameters:
+        - name: worldPvc
+        - name: worldName
+        - name: imageRepo
+        - name: volumeLocation
+        - name: workingLocation
+        - name: version
+        - name: reconName
+        - name: configFile
+        - name: retryCount
+        - name: project
+        - name: cpuCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: worker-cores
+        - name: memCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: worker-ram
+    retryStrategy:
+      limit: "{{inputs.parameters.retryCount}}"
+      retryPolicy: OnError
+    podSpecPatch: |
+      containers:
+        - name: main
+          resources:
+            requests:
+              cpu: "{{inputs.parameters.cpuCount}}"
+            # limits:
+            #   memory: "{{inputs.parameters.memCount}}"
+    script:
+        image: "{{inputs.parameters.imageRepo}}/worker:{{inputs.parameters.version}}"
+        command: [python3]
+        source: |
+          import os
+          import json
+          import re
+          import sys
+          import copy
+          import glob
+          import math
+          import logging
+          import shutil
+          from datetime import datetime, timedelta, timezone
+
+          recon_path = "{{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}"
+          
+          def getGeometricError(level,geInc):
+            return geInc * math.pow(1.8, level) - geInc
+
+          def addNewLOD(basetile,currentlod,filename,geIncr,currentLevel):
+            newlod = copy.deepcopy(basetile)
+            newlod["content"]["uri"] = f'{filename}'
+            newlod["children"] = [currentlod]
+            newlod["geometricError"] = getGeometricError(currentLevel,geIncr)
+            return newlod
+
+          class hourstimedelta(timedelta):
+            def __str__(self):
+              seconds = self.total_seconds()
+              hours = seconds // 3600
+              minutes = (seconds % 3600) // 60
+              seconds = seconds % 60
+              str = '{}:{:02d}:{:02d}'.format(int(hours), int(minutes), int(seconds))
+              return (str)
+
+          return_value = 0
+
+          start_time = datetime.now(timezone.utc)
+          full_config = os.path.join(recon_path, "{{inputs.parameters.configFile}}")
+          with open(full_config, 'r') as config_file:
+            config_json = json.load(config_file)
+
+          log_location = config_json.get('logsFolder')
+          projects_config = config_json.get('projectBuilder',{})
+          projects_folder = projects_config.get('out','projects')
+          project_path = os.path.join(recon_path, projects_folder, "{{inputs.parameters.project}}")
+          time_log_path = os.path.join(recon_path, log_location, "{{workflow.name}}_times.csv")
+
+          project_tiling_name = "{{inputs.parameters.project}}"
+          project_tiling_name = project_tiling_name.replace("/","_")
+          log_path = os.path.join(project_path, log_location, "{{workflow.name}}_" + project_tiling_name + "_lod_tileset.log")
+          logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s [%(levelname)s] %(message)s",
+            handlers=[
+              logging.FileHandler(log_path),
+              logging.StreamHandler(sys.stdout)
+            ]
+          )
+          logging.info(full_config)
+
+          if 'lod' not in config_json: 
+            logging.info('Not processing lods, skip lod tileset generation')
+
+          else:
+            lod_config = config_json['lod']
+            processLOD_config = lod_config.get('processHLOD',{})
+            geIncr = processLOD_config.get('geometricErrorIncrement',0.15)
+
+            logging.info(f'Geometric Error: {geIncr}')
+
+            tiles_folder = config_json.get('tilesFolder')
+            tileset_name = processLOD_config.get('hlodTilesetFilename','tileset.json')
+            tileset_file = os.path.join(project_path,tileset_name)
+            newtileset_file = os.path.join(project_path,"tileset_lod.json")
+            lod_append_string = lod_config.get('appendStringFormatter', '_LOD_%d')
+            lod_string = lod_append_string.split('%')[0]
+            process_model_config = config_json.get('processModel')
+            tile_name = process_model_config.get('name')
+
+            logging.info(f'LOD tileset: {newtileset_file}')
+
+            # Get the set of LODs
+            lod_scene_pattern = f'{project_path}/undistorted/openmvs/{tile_name}*{lod_string}*.glb'
+            lod_scenes = glob.glob(lod_scene_pattern)
+            lod_pattern = re.compile(r'{lod_string}\w*')
+            lod_parts = [os.path.basename(path) for path in lod_scenes]
+            lod_parts.sort()
+            logging.info(f'LOD files {lod_parts}')
+            
+            if not lod_parts:
+              logging.warning("No LODs found will copy original tileset to LOD tileset.")
+              shutil.copy(tileset_file, newtileset_file)
+            else:
+              try:
+                with open(tileset_file, "r") as f:
+                  tileset = json.load(f)
+                  logging.info(f'Loading {tileset_file}')
+
+                  # Assemble the new root node
+                  basetile = tileset['root']
+                  newroot = copy.deepcopy(basetile)
+                  newroot["content"]["uri"] = ""
+                  tileset['root'] = newroot
+
+                  # Fix the basetile that we're going to replicate
+                  basetile['transform'] = [1, 0, 0, 0,
+                    0, 1, 0, 0,
+                    0, 0, 1, 0,
+                    0, 0, 0, 1]
+
+                  # Set up the current LOD and go
+                  currentlod = basetile
+                  currentLevel = 1
+                  for lod in lod_parts:
+                    logging.info(f'Adding {lod}')
+                    currentlod = addNewLOD(basetile,currentlod,lod,geIncr,currentLevel)
+                    currentLevel += 1
+
+                  # Make sure the latest lod is set in the root children
+                  newroot["children"] = [currentlod]
+                  # Update the geometricError to be bigger than the last LOD
+                  newroot["geometricError"] = getGeometricError(currentLevel,geIncr)
+                  
+                with open(newtileset_file, "w") as outfile:
+                  json.dump(tileset, outfile, indent=2)
+                  logging.info(f'Wrote {newtileset_file}')
+                    
+              except (FileNotFoundError, ValueError) as inst:
+                logging.critical(f'Error: {inst}')
+                return_value = 1
+            
+            # Copy lod tileset to tiles folder
+            tiles_project = os.path.join("{{inputs.parameters.volumeLocation}}",tiles_folder,"{{inputs.parameters.project}}")
+            shutil.copy(newtileset_file, os.path.join(tiles_project,"tileset_lod.json"))
+
+          end_time = datetime.now(timezone.utc)
+          duration_seconds = (end_time - start_time).total_seconds()
+
+          duration_str = str(hourstimedelta(seconds=int(duration_seconds)))
+          formatted_start_time = start_time.strftime("%Y-%m-%d %H:%M:%S")
+          formatted_end_time = end_time.strftime("%Y-%m-%d %H:%M:%S")
+          with open(time_log_path, 'a') as time_log_file:
+            time_log_file.write(f"lod-tileset, {{inputs.parameters.project}}, {formatted_start_time}, {formatted_end_time}, {duration_str}\n")
+          sys.exit(return_value)
+        volumeMounts:
+        - name: workdir
+          mountPath: "{{inputs.parameters.workingLocation}}"
+        - name: volumedir
+          mountPath: "{{inputs.parameters.volumeLocation}}"
+    tolerations:
+    - key: "s3gis.be/pool"
+      operator: "Equal"
+      value: "worker"
+      effect: "NoSchedule"
+    nodeSelector:
+      node-type: worker
+    synchronization:
+      semaphore:
+        configMapKeyRef:
+          name:  "{{workflow.parameters.worldConfig}}"
+          key: worker-limit
+    volumes:
+      - name: volumedir
+        persistentVolumeClaim:
+          claimName: "{{inputs.parameters.worldPvc}}"
+    metadata:
+      labels:
+        world: "{{inputs.parameters.worldName}}"
+        workflow: "{{workflow.name}}"
+
+
+  - name: project-sync-to-s3
+    inputs:
+        parameters:
+        - name: worldTempBucket
+        - name: worldName
+        - name: imageRepo
+        - name: region
+        - name: workingLocation
+        - name: logLocation
+        - name: version
+        - name: reconName
+        - name: configFile
+        - name: retryCount
+        - name: project
+        - name: cpuCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: worker-cores
+        - name: memCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: worker-ram
+    retryStrategy:
+      limit: "{{inputs.parameters.retryCount}}"
+      retryPolicy: OnError
+    podSpecPatch: |
+      containers:
+        - name: main
+          resources:
+            requests:
+              cpu: "{{inputs.parameters.cpuCount}}"
+            # limits:
+            #   memory: "{{inputs.parameters.memCount}}"
+    script:
+        image: "{{inputs.parameters.imageRepo}}/worker:{{inputs.parameters.version}}"
+        command: [bash]
+        source: | 
+            set -eo pipefail
+            project_folder=$(jq -r '.projectBuilder.out' "{{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/{{inputs.parameters.configFile}}")
+            project_name=$(echo "{{inputs.parameters.project}}" | sed 's/\//_/g')
+            mkdir -p "{{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/$project_folder/{{inputs.parameters.project}}/{{inputs.parameters.logLocation}}"
+            exec > >(tee -a {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/$project_folder/{{inputs.parameters.project}}/{{inputs.parameters.logLocation}}/{{workflow.name}}_${project_name}_project_sync_to_s3.log) 2>&1
+            cd "{{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/$project_folder/{{inputs.parameters.project}}"
+            
+            start_time=$(date -u +%s)
+              # Sync for working temp
+              echo "Syncing {{inputs.parameters.project}} to S3 Temp:"
+              aws s3 sync --region {{inputs.parameters.region}} --no-progress --no-follow-symlinks {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/$project_folder/{{inputs.parameters.project}} s3://{{inputs.parameters.worldTempBucket}}/{{inputs.parameters.reconName}}/$project_folder/{{inputs.parameters.project}}
+            end_time=$(date -u +%s)
+            duration=$((end_time - start_time))
+            formatted_duration=$(printf "%d:%02d:%02d" "$((duration / 3600))" "$(((duration % 3600) / 60))" "$((duration % 60))")
+            echo project-sync-to-s3, {{inputs.parameters.project}}, $(date +"%Y-%m-%d %H:%M:%S" -ud "@$start_time"), $(date +"%Y-%m-%d %H:%M:%S" -ud "@$end_time"), $formatted_duration >> {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/{{inputs.parameters.logLocation}}/{{workflow.name}}_times.csv
+            aws s3 sync --region {{inputs.parameters.region}} {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/{{inputs.parameters.logLocation}}/ s3://{{inputs.parameters.worldTempBucket}}/{{inputs.parameters.reconName}}/{{inputs.parameters.logLocation}}/
+        volumeMounts:
+          - name: workdir
+            mountPath: "{{inputs.parameters.workingLocation}}"
+    tolerations:
+    - key: "s3gis.be/pool"
+      operator: "Equal"
+      value: "worker"
+      effect: "NoSchedule"
+    nodeSelector:
+      node-type: worker
+    synchronization:
+      semaphore:
+        configMapKeyRef:
+          name:  "{{workflow.parameters.worldConfig}}"
+          key: worker-limit
+    metadata:
+      labels:
+        world: "{{inputs.parameters.worldName}}"
+        workflow: "{{workflow.name}}"
+
+  - name: tile-sync-to-s3
+    inputs:
+        parameters:
+        - name: worldPipelineBucket
+        - name: worldTempBucket
+        - name: worldTileBucket
+        - name: worldPvc
+        - name: worldName
+        - name: imageRepo
+        - name: region
+        - name: volumeLocation
+        - name: workingLocation
+        - name: logLocation
+        - name: version
+        - name: reconName
+        - name: configFile
+        - name: retryCount
+        - name: project
+        - name: cpuCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: worker-cores
+        - name: memCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: worker-ram
+    retryStrategy:
+      limit: "{{inputs.parameters.retryCount}}"
+      retryPolicy: OnError
+    podSpecPatch: |
+      containers:
+        - name: main
+          resources:
+            requests:
+              cpu: "{{inputs.parameters.cpuCount}}"
+            # limits:
+            #   memory: "{{inputs.parameters.memCount}}"
+    script:
+        image: "{{inputs.parameters.imageRepo}}/worker:{{inputs.parameters.version}}"
+        command: [bash]
+        source: | 
+          set -eo pipefail
+          project_folder=$(jq -r '.projectBuilder.out' "{{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/{{inputs.parameters.configFile}}")
+          project_name=$(echo "{{inputs.parameters.project}}" | sed 's/\//_/g')
+          mkdir -p "{{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/$project_folder/{{inputs.parameters.project}}/{{inputs.parameters.logLocation}}"
+          exec > >(tee -a {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/$project_folder/{{inputs.parameters.project}}/{{inputs.parameters.logLocation}}/{{workflow.name}}_${project_name}_tile_sync_to_s3.log) 2>&1
+          cd "{{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/$project_folder/{{inputs.parameters.project}}"
+          
+          start_time=$(date -u +%s)
+            # Sync for working temp
+            tileset_file=$(jq -r '.tilesetForModel.out' config.json)
+            tile_name=$(jq -r '.processModel.name' {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/recon_config.json)
+
+            echo "Syncing {{inputs.parameters.project}} to S3 Tile:"
+            #aws s3 cp --region {{inputs.parameters.region}} --no-progress undistorted/openmvs/"$tile_name".glb s3://{{inputs.parameters.worldTileBucket}}/{{inputs.parameters.project}}/"$tile_name".glb
+            aws s3 cp --region {{inputs.parameters.region}} --no-progress "$tileset_file" s3://{{inputs.parameters.worldTileBucket}}/{{inputs.parameters.project}}/"$tileset_file"
+            aws s3 cp --region {{inputs.parameters.region}} --no-progress tileset_lod.json s3://{{inputs.parameters.worldTileBucket}}/{{inputs.parameters.project}}/tileset_lod.json
+            aws s3 sync --region {{inputs.parameters.region}} --no-progress undistorted/openmvs s3://{{inputs.parameters.worldTileBucket}}/{{inputs.parameters.project}} --exclude "*" --include "*.ktx2" --include "*.glb"
+
+            echo "Syncing {{inputs.parameters.project}} pipeline tile to S3 Pipeline"
+            tiles_folder=$(jq -r '.tilesFolder' {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/{{inputs.parameters.configFile}})
+            aws s3 sync --region {{inputs.parameters.region}} --no-progress {{inputs.parameters.volumeLocation}}/$tiles_folder s3://{{inputs.parameters.worldPipelineBucket}}/$tiles_folder
+
+          end_time=$(date -u +%s)
+          duration=$((end_time - start_time))
+          formatted_duration=$(printf "%d:%02d:%02d" "$((duration / 3600))" "$(((duration % 3600) / 60))" "$((duration % 60))")
+          echo tile-sync-to-s3, {{inputs.parameters.project}}, $(date +"%Y-%m-%d %H:%M:%S" -ud "@$start_time"), $(date +"%Y-%m-%d %H:%M:%S" -ud "@$end_time"), $formatted_duration >> {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/{{inputs.parameters.logLocation}}/{{workflow.name}}_times.csv
+          aws s3 sync --region {{inputs.parameters.region}} {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/{{inputs.parameters.logLocation}}/ s3://{{inputs.parameters.worldTempBucket}}/{{inputs.parameters.reconName}}/{{inputs.parameters.logLocation}}/
+        volumeMounts:
+          - name: workdir
+            mountPath: "{{inputs.parameters.workingLocation}}"
+          - name: volumedir
+            mountPath: "{{inputs.parameters.volumeLocation}}"
+    tolerations:
+    - key: "s3gis.be/pool"
+      operator: "Equal"
+      value: "worker"
+      effect: "NoSchedule"
+    nodeSelector:
+      node-type: worker
+    synchronization:
+      semaphore:
+        configMapKeyRef:
+          name:  "{{workflow.parameters.worldConfig}}"
+          key: sync-push-limit
+    volumes:
+      - name: volumedir
+        persistentVolumeClaim:
+          claimName: "{{inputs.parameters.worldPvc}}"
+    metadata:
+      labels:
+        world: "{{inputs.parameters.worldName}}"
+        workflow: "{{workflow.name}}"
+
+  - name: exit-handler
+    steps:
+    - - name: db-update
+        template: db-update
+        when: "{{workflow.status}} != Succeeded"
+        arguments:
+          parameters:
+            [ {name: imageRepo,            value: "{{workflow.parameters.imageRepo}}"},
+              {name: worldName,            value: "{{workflow.parameters.worldName}}"},
+              {name: version,              value: "{{workflow.parameters.version}}"},
+              {name: workingLocation,      value: "{{workflow.parameters.workingLocation}}"},
+              {name: logLocation,          value: "{{workflow.parameters.logLocation}}"},
+              {name: retryCount,           value: "{{workflow.parameters.retryCount}}"},
+              {name: reconName,            value: "{{workflow.parameters.reconName}}"},
+              {name: configFile,           value: "{{workflow.parameters.configFile}}"},
+              {name: reconId,              value: "{{workflow.parameters.reconId}}"},
+              {name: status,               value: "Failed"} ]
+    - - name: exit-sync-logs
+        template: exit-sync-logs
+
+  - name: db-update
+    inputs:
+        parameters:
+        - name: imageRepo
+        - name: worldName
+        - name: workingLocation
+        - name: logLocation
+        - name: version
+        - name: retryCount
+        - name: reconName
+        - name: reconId
+        - name: configFile
+        - name: status
+        - name: cpuCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: worker-cores
+        - name: memCount
+          valueFrom:
+            configMapKeyRef:
+              name: "{{workflow.parameters.worldConfig}}"
+              key: worker-ram
+    retryStrategy:
+        limit: "{{inputs.parameters.retryCount}}"
+        retryPolicy: OnError
+    podSpecPatch: |
+      containers:
+        - name: main
+          resources:
+            requests:
+              cpu: "{{inputs.parameters.cpuCount}}"
+            # limits:
+            #   memory: "{{inputs.parameters.memCount}}"
+    script:
+        image: "{{inputs.parameters.imageRepo}}/worker:{{inputs.parameters.version}}"
+        command: [bash]
+        source: |
+            set -eo pipefail
+            mkdir -p {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/{{inputs.parameters.logLocation}}
+            exec > >(tee -a {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/{{inputs.parameters.logLocation}}/{{workflow.name}}_db_update.log) 2>&1
+
+            start_time=$(date -u +%s)
+              set -eo pipefail
+              cd {{inputs.parameters.workingLocation}}
+              world_id=$(curl -s -X 'GET' 'http://bda-tiledb-ws.bda:8080/world' -H 'accept: */*' | jq -r '.[] | select(.name == "{{inputs.parameters.worldName}}") | .id')
+              
+              echo "Updated reconstruction record"
+              echo '{"id": {{inputs.parameters.reconId}}, "status": "{{inputs.parameters.status}}" }' | jq | tee {{inputs.parameters.reconName}}_{{inputs.parameters.status}}.json
+              
+              echo "Putting recon data to DB"
+              response=$(curl -X 'PUT' 'http://bda-tiledb-ws.bda:8080/reconstruction/{{inputs.parameters.reconId}}' -w "%{http_code}" -s -o status.json -H 'Content-Type: application/json' -d @{{inputs.parameters.reconName}}_{{inputs.parameters.status}}.json)
+              if [ "$response" -ne 200 ]; then
+                echo "Reconstruction {{inputs.parameters.reconName}} with id {{inputs.parameters.reconId}} had http response code "$response
+                exit "$response"
+              fi
+
+              step=$(jq '{id,status} + {"currentStep": "db-update", "completedSteps": 8 }' {{inputs.parameters.reconName}}_{{inputs.parameters.status}}.json)
+              mosquitto_pub -h 'mosquitto-mqtts.bda' -t world/$world_id/reconstruction/{{inputs.parameters.reconId}} -m "$step"
+            end_time=$(date -u +%s)
+            duration=$((end_time - start_time))
+            formatted_duration=$(printf "%d:%02d:%02d" "$((duration / 3600))" "$(((duration % 3600) / 60))" "$((duration % 60))")
+            echo db-update,, $(date +"%Y-%m-%d %H:%M:%S" -ud "@$start_time"), $(date +"%Y-%m-%d %H:%M:%S" -ud "@$end_time"), $formatted_duration >> {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/{{inputs.parameters.logLocation}}/{{workflow.name}}_times.csv 
+        volumeMounts:
+        - name: workdir
+          mountPath: "{{inputs.parameters.workingLocation}}"
+    tolerations:
+    - key: "s3gis.be/pool"
+      operator: "Equal"
+      value: "worker"
+      effect: "NoSchedule"
+    nodeSelector:
+      node-type: worker
+    synchronization:
+      semaphore:
+        configMapKeyRef:
+          name:  "{{workflow.parameters.worldConfig}}"
+          key: worker-limit
+    metadata:
+      labels:
+        world: "{{inputs.parameters.worldName}}"
+        workflow: "{{workflow.name}}"
+
+  - name: exit-sync-logs
+    inputs:
+      parameters:
+      - name: worldName
+        value: "{{workflow.parameters.worldName}}"
+      - name: workingLocation
+        value: "{{workflow.parameters.workingLocation}}"
+      - name: volumeLocation
+        value: "{{workflow.parameters.volumeLocation}}"
+      - name: logLocation
+        value: "{{workflow.parameters.logLocation}}"
+      - name: reconName
+        value: "{{workflow.parameters.reconName}}"
+      - name: worldTempBucket
+        valueFrom:
+          configMapKeyRef:
+            name: "{{workflow.parameters.worldConfig}}"
+            key: temp
+      - name: worldPipelineBucket
+        valueFrom:
+          configMapKeyRef:
+            name: "{{workflow.parameters.worldConfig}}"
+            key: pipeline
+      - name: worldPvc
+        valueFrom:
+          configMapKeyRef:
+            name: "{{workflow.parameters.worldConfig}}"
+            key: pvc
+      - name: cpuCount
+        valueFrom:
+          configMapKeyRef:
+            name: "{{workflow.parameters.worldConfig}}"
+            key: worker-cores
+      - name: memCount
+        valueFrom:
+          configMapKeyRef:
+            name: "{{workflow.parameters.worldConfig}}"
+            key: worker-ram
+    podSpecPatch: |
+      containers:
+        - name: main
+          resources:
+            requests:
+              cpu: "{{inputs.parameters.cpuCount}}"
+            # limits:
+            #   memory: "{{inputs.parameters.memCount}}"
+    script:
+        image: bitnami/aws-cli:latest
+        command: [bash]
+        source: | 
+            set -eo pipefail
+            mkdir -p {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/{{inputs.parameters.logLocation}}
+            # Temp sync all for debug
+            aws s3 sync --no-progress --no-follow-symlinks {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}} s3://{{inputs.parameters.worldTempBucket}}/{{inputs.parameters.reconName}}
+            start_time=$(date -ud "{{workflow.creationTimestamp}}" +%s)
+            duration_sec=$(echo "{{workflow.duration}}" | awk -F'.' '{print $1}')
+            formatted_duration=$(printf "%d:%02d:%02d" "$((duration_sec / 3600))" "$(((duration_sec % 3600) / 60))" "$((duration_sec % 60))")
+            echo {{workflow.name}},, $(date +"%Y-%m-%d %H:%M:%S" -ud "@$start_time"), $(date +"%Y-%m-%d %H:%M:%S" -ud "@$((start_time + duration_sec))"), $formatted_duration >> {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/{{inputs.parameters.logLocation}}/{{workflow.name}}_times.csv
+            aws s3 sync {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/{{inputs.parameters.logLocation}}/ s3://{{inputs.parameters.worldTempBucket}}/{{inputs.parameters.reconName}}/{{inputs.parameters.logLocation}}/
+            aws s3 sync {{inputs.parameters.workingLocation}}/{{inputs.parameters.reconName}}/{{inputs.parameters.logLocation}}/ s3://{{inputs.parameters.worldPipelineBucket}}/recon_times/{{inputs.parameters.logLocation}}/ --exclude "*" --include "*times.csv"     
+        volumeMounts:
+        - name: workdir
+          mountPath: "{{inputs.parameters.workingLocation}}"
+        - name: volumedir
+          mountPath: "{{inputs.parameters.volumeLocation}}"
+    tolerations:
+    - key: "s3gis.be/pool"
+      operator: "Equal"
+      value: "worker"
+      effect: "NoSchedule"
+    nodeSelector:
+      node-type: worker
+    volumes:
+      - name: volumedir
+        persistentVolumeClaim:
+          claimName: "{{inputs.parameters.worldPvc}}"
+    metadata:
+      labels:
+        world: "{{inputs.parameters.worldName}}"
+        workflow: "{{workflow.name}}"
