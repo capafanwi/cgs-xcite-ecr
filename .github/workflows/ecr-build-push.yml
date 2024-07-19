@@ -52,7 +52,7 @@ jobs:
     
     - name: Build and Push world-docker image
       run: |
-        cd docker/world-docker
+        cd docker/world
         docker build -t ${{ steps.bump_versions.outputs.new_version }} .
         IMAGE_TAG=${{ steps.bump_versions.outputs.new_version }}
         ECR_REGISTRY=${{ secrets.AWS_ACCOUNT_NUMBER }}.dkr.ecr.us-east-1.amazonaws.com
