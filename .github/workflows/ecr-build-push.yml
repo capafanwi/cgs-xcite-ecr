@@ -50,9 +50,9 @@ jobs:
         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         aws-region: us-east-1
     
-    - name: Build and Push world-docker image
+    - name: Build and Push worker-docker image
       run: |
-        cd docker/world
+        cd docker/worker
         docker build -t ${{ steps.bump_versions.outputs.new_version }} .
         IMAGE_TAG=${{ steps.bump_versions.outputs.new_version }}
         ECR_REGISTRY=${{ secrets.AWS_ACCOUNT_NUMBER }}.dkr.ecr.us-east-1.amazonaws.com
