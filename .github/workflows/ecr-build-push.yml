@@ -26,10 +26,10 @@ jobs:
     - name: Update YAML files with new versions
       run: |
         new_version=$(cat VERSION)
-        echo "Updating pipeline yamls with versions new_versions"
+        echo "Updating Workflow yaml with versions $new_version"
         sed -i "s/value: \"[0-9.]*\"/value: \"$new_version\"/g" argo-artifacts/recon-pipeline.yaml
-        sed -i "s/value: \"[0-9.]*\"/value: \"$new_gpu_version\"/g" argo-artifacts/source-pipeline.yaml
-        sed -i "s/value: \"[0-9.]*\"/value: \"$new_world_version\"/g" argo-artifacts/world-pipeline.yaml
+        sed -i "s/value: \"[0-9.]*\"/value: \"$new_version\"/g" argo-artifacts/source-pipeline.yaml
+        sed -i "s/value: \"[0-9.]*\"/value: \"$new_version\"/g" argo-artifacts/world-pipeline.yaml
         echo "Updated pipeline.yamls"
 
     - name: Commit updated files
