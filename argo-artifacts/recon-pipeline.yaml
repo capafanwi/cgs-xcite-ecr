@@ -33,7 +33,7 @@ spec:
       - name: logLocation
         value: "logs"
       - name: version
-        value: "2.1.37"
+        value: "2.1.38"
       - name: reconName
       - name: reconId
       - name: configFile
