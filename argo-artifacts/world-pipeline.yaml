@@ -26,7 +26,7 @@ spec:
       - name: logLocation
         value: "logs"
       - name: version
-        value: "2.1.38"
+        value: "2.1.39"
       - name: retryCount
         value: 2
       - name: worldInfoLocation
@@ -57,7 +57,7 @@ spec:
                {name: version,              value: "{{workflow.parameters.version}}"},
                {name: retryCount,           value: "{{workflow.parameters.retryCount}}"},
                {name: status,               value: "Creating"},
-               {name: stepCount,            value: "2.1.38"}]
+               {name: stepCount,            value: "2.1.39"}]
         - name: s3-create
           template: s3-create
           depends: db-creating
@@ -687,7 +687,7 @@ spec:
                {name: version,              value: "{{workflow.parameters.version}}"},
                {name: retryCount,           value: "{{workflow.parameters.retryCount}}"},
                {name: status,               value: "Destroying"},
-               {name: stepCount,            value: "2.1.38"}]
+               {name: stepCount,            value: "2.1.39"}]
         - name: cdk-destroy
           template: cdk-destroy
           depends: db-destroying
@@ -1176,7 +1176,7 @@ spec:
               {name: version,              value: "{{workflow.parameters.version}}"},
               {name: retryCount,           value: "{{workflow.parameters.retryCount}}"},
               {name: status,               value: "Failed"},
-              {name: stepCount,            value: "2.1.38"}]
+              {name: stepCount,            value: "2.1.39"}]
     - - name: exit-sync-logs
         template: exit-sync-logs
         arguments:
