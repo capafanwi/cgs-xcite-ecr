@@ -173,3 +173,4 @@ jobs:
       with:
         name: trivy-report-osm
         path: docker/OSM/trivy-report-osm.txt
+## verify that version is updated on all 4 world-pipeline parameters
