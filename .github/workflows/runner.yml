@@ -17,8 +17,8 @@ jobs:
     - name: Bump versions
       id: bump_versions
       run: |
-        chmod +x scripts/bump_version.sh
-        ./scripts/bump_version.sh
+        chmod +x scripts/bump_version_runner.sh
+        ./scripts/bump_version_runner.sh
         new_version=$(cat VERSION-RUNNERS)
         echo "new_version=$new_version" >> $GITHUB_ENV
         echo "::set-output name=new_version::$new_version"
