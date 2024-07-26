@@ -19,13 +19,13 @@ jobs:
       run: |
         chmod +x scripts/bump_version.sh
         ./scripts/bump_version.sh
-        new_version=$(cat VERSION)
+        new_version=$(cat VERSION-RUNNERS)
         echo "new_version=$new_version" >> $GITHUB_ENV
         echo "::set-output name=new_version::$new_version"
 
     - name: Update YAML files with new versions
       run: |
-        new_version=$(cat VERSION)
+        new_version=$(cat VERSION-RUNNERS)
         echo "Updating YAML files with versions $new_version"
         sed -i "s/value: \"[0-9.]*\"/value: \"$new_version\"/g" argo-artifacts/runners/deployment.yaml
         echo "Updated YAML files"
@@ -34,7 +34,7 @@ jobs:
       run: |
         git config --global user.name 'capafanwi'
         git config --global user.email 'collins.afanwi@capgemini-gs.com'
-        git add VERSION argo-artifacts/runners/deployment.yaml
+        git add VERSION-RUNNERS argo-artifacts/runners/deployment.yaml
         git commit -m "current runner version: ${{ steps.bump_versions.outputs.new_version }}" || echo "No changes to commit"
         git stash
         git pull --rebase origin main
