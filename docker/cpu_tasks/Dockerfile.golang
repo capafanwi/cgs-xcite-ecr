@@ -1,0 +1,249 @@
+# When running from linux,git bash or equivelent nix command line
+# Set up an ssh config that has this included (~/.ssh/config, use your own username):
+#
+# Host github.com-bpu
+#     Hostname github.com
+#     IdentityFile=/home/ubuntu/.ssh/id_deploy_key
+# Host github.com-bgu
+#     Hostname github.com
+#     IdentityFile=/home/ubuntu/.ssh/id_deploy_bgu
+# Host github.com-baw
+#     Hostname github.com
+#     IdentityFile=/home/ubuntu/.ssh/id_deploy_baw
+# Host github.com-360
+#     Hostname github.com
+#     IdentityFile=/home/ubuntu/.ssh/id_deploy_360
+# Host github.com-sfm
+#     Hostname github.com
+#     IdentityFile=/home/marcellens/.ssh/id_deploy_sfm    
+#
+# Make sure you have all the above id_deploy* private keys also in ~/.ssh
+# Run the build like this (note the change in context):
+# docker build -f Dockerfile.golang -t cpu_tasks ~/.ssh
+#
+#Run the docker image and mount like a folder like this:
+# docker run --mount type=bind,source=/data/folder/Waxhaw_testing",target=/Waxhaw_testing -it cpu_tasks /bin/bash
+FROM ubuntu:22.04 as intermediate
+
+ARG BDA_PIPELINE_UTILIES_TAG=2.23.0-snapshot
+ARG BDA_GPX_UTILS_TAG=2.2.0
+ARG BDA_ARGO_WORKFLOWS_TAG=develop
+ARG BDA_360_TO_FRAMES_TAG=develop
+ARG OPENMVS_TAG=v2.2.0
+ARG IND_BERMUDA_OPENSFM_TAG=X.01.19.24
+ARG DEBIAN_FRONTEND=noninteractive #needed to avoid interactive displays when apt installing certain packages
+
+RUN apt-get update && apt-get -y install \
+    git \
+    build-essential \
+    wget \
+    cmake \
+    #360toframes
+    libboost-program-options-dev \
+    libjpeg-dev \
+    libpng-dev \
+    libavcodec-dev \
+    libavformat-dev \
+    libavutil-dev \
+    libswscale-dev \
+    pkg-config \
+    #OpenSfM
+    libeigen3-dev \
+    libopencv-dev \
+    libceres-dev \
+    python3-pyproj \
+    python3-dev \
+    python3-numpy \
+    python3-opencv \
+    python3-pip \
+    python3-scipy \
+    python3-yaml \
+    curl \
+    # openMVS
+    libboost-iostreams-dev \
+    libboost-system-dev \
+    libboost-serialization-dev \
+    libcgal-dev \
+    libeigen3-dev \
+    libopencv-dev \
+    libceres-dev \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+# add credentials on build
+RUN mkdir /root/.ssh
+COPY /id_deploy* /root/.ssh
+COPY /config /root/.ssh
+RUN sed -i 's^/home/[a-z]*/^/root/^g' /root/.ssh/config
+RUN chmod 600 /root/.ssh/*
+
+# make sure your domain is accepted
+RUN touch /root/.ssh/known_hosts
+RUN ssh-keyscan github.com >> /root/.ssh/known_hosts
+
+#install golang 1.21.4
+RUN wget https://go.dev/dl/go1.21.4.linux-amd64.tar.gz
+RUN tar -xzf go1.21.4.linux-amd64.tar.gz -C /usr/local
+ENV PATH="${PATH}:/usr/local/go/bin"
+
+RUN wget https://www.johnvansickle.com/ffmpeg/old-releases/ffmpeg-5.1.1-amd64-static.tar.xz
+RUN tar xvf ffmpeg-5.1.1-amd64-static.tar.xz
+
+WORKDIR /
+#Use the command below to checkout a given branch
+#  increment the echo when you want to pull an update to the branch otherwise you will get the docker cache
+RUN echo '0' >/dev/null && git clone --branch ${BDA_PIPELINE_UTILIES_TAG} git@github.com-bpu:Unity-Technologies/bda-pipeline-utilities.git
+RUN echo '0' >/dev/null && git clone --branch ${BDA_ARGO_WORKFLOWS_TAG} git@github.com-baw:/capbancroft/bda-argo-workflows.git
+RUN echo '0' >/dev/null && git clone --branch ${BDA_GPX_UTILS_TAG} git@github.com-bgu:/capbancroft/bda-gpx-utils.git
+RUN echo '0' >/dev/null && git clone --branch ${BDA_360_TO_FRAMES_TAG} git@github.com-360:Unity-Technologies/bda-360-to-frames.git
+RUN echo '0' >/dev/null && git clone --branch ${IND_BERMUDA_OPENSFM_TAG} git@github.com-sfm:capbancroft/ind-bermuda-opensfm.git
+RUN echo '0' >/dev/null && git clone --branch ${OPENMVS_TAG} --recurse-submodules https://github.com/cdcseacave/openMVS.git
+
+#########################
+#  sfm-utils Build
+#########################
+WORKDIR /bda-pipeline-utilities
+RUN go mod download
+RUN go build ./cmd/sfm-utils
+
+#########################
+#  360 To Frames
+#########################
+RUN mkdir /bda-360-to-frames/build
+WORKDIR /bda-360-to-frames/build
+RUN cmake ..
+RUN cmake --build . --config Release -j
+
+#########################
+#  OpenSfM Build
+#########################
+WORKDIR /ind-bermuda-opensfm
+RUN git submodule update --init --recursive
+
+#RUN pip3 install setuptools opencv-python pyyaml
+RUN pip3 install -r requirements.txt && \
+    python3 setup.py build
+
+#########################
+#  OpenMVS Build
+#########################
+RUN wget https://github.com/cnr-isti-vclab/vcglib/archive/refs/tags/2022.02.tar.gz &&\
+    tar -xvf 2022.02.tar.gz -C /usr/local/include/ && rm 2022.02.tar.gz
+ENV VCG_ROOT=/usr/local/include/vcglib-2022.02/
+WORKDIR /openMVS
+# RUN rm -rf /openMVS/make/*
+RUN cmake -B make -S . -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/openMVS/make/install &&\
+    cmake --build make -j &&\
+    cmake --install make
+
+FROM ubuntu:22.04 AS cpu_tasks
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+# Install apt-getable dependencies
+RUN apt-get update \
+    && apt-get -y upgrade \
+    && apt-get install -y \
+        wget \
+        #360toframes
+        libboost-program-options-dev \
+        libjpeg-dev \
+        libpng-dev \
+        libavcodec58 \
+        libavformat58 \
+        libavutil56 \
+        libswscale5 \
+        #tile-db posting
+        curl \
+        gdal-bin \
+        python3-gdal \
+        #OpenSFM
+        libceres-dev \
+        libopenblas0 \
+        python3 \
+        python3-opencv \
+        python3-pip \
+        python3-pyproj \
+        python3-yaml \
+        # openMVS
+        libboost-iostreams1.74.0 \
+        libboost-system1.74.0 \
+        libboost-serialization1.74.0 \
+        libboost-program-options1.74.0 \
+        libopencv-imgcodecs4.5d \
+        libopencv-calib3d4.5d \
+        #utility for argo
+        awscli \
+        tree \
+        mosquitto-clients \
+        jq \
+        && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+#RUN pip install pybind11
+#numpy can not be above this version as we get a deprecation error
+# not sure why though since it works fine on my WSL with 1.24.1
+#RUN pip install numpy==1.23 xml2dict
+RUN pip install pymeshlab
+
+#COPY OpenSfM /OpenSfM
+
+#WORKDIR /OpenSfM
+# Removing patch file as we assume build server has patched opensfm.
+#COPY urbaneng/tools/opensfm_calculate.patch /urbaneng/opensfm_calculate.patch
+#RUN git apply /urbaneng/opensfm_calculate.patch
+# remove cache directory so it can build and not get error.
+#RUN rm -rf cmake_build/*
+#RUN pip3 install -r requirements.txt && \
+#    python3 setup.py build
+
+#OpenMVs setup
+#wget https://github.com/cnr-isti-vclab/vcglib/archive/refs/tags/2022.02.tar.gz
+#COPY 2022.02.tar.gz /tmp/2022.02.tar.gz
+#RUN tar -xvf /tmp/2022.02.tar.gz -C /usr/local/include/
+#ENV VCG_ROOT=/usr/local/include/vcglib-2022.02/
+#COPY openMVS /openMVS
+#WORKDIR /openMVS/make
+#RUN rm -rf /openMVS/make/*
+#RUN cmake .. -DCMAKE_BUILD_TYPE=Release
+#RUN cmake --build . -j
+#RUN cmake --install .
+
+# Ktx textures
+WORKDIR /
+RUN wget https://github.com/KhronosGroup/KTX-Software/releases/download/v4.0.0/KTX-Software-4.0.0-Linux.deb && \
+    apt install ./KTX-Software-4.0.0-Linux.deb && \
+    rm KTX-Software-4.0.0-Linux.deb
+
+# setup ffmpeg v5 ffprobe for image rotation
+COPY --from=intermediate /ffmpeg-5.1.1-amd64-static/ffprobe /usr/local/bin/ffprobe
+COPY --from=intermediate /ffmpeg-5.1.1-amd64-static/ffmpeg /usr/local/bin/ffmpeg
+
+#COPY 360toFrames /360toFrames
+#COPY urbaneng/tools /urbaneng
+#COPY s3-python-utils /s3-python-utils
+#COPY bda-pipeline-utilities /bda-pipeline-utilities
+#fix for problem with vertex being behind camera
+#COPY /bda-pipeline-utilities/scripts/export_openmvs.py /OpenSfM/opensfm/actions/export_openmvs.py
+#COPY --from=build /sfm-utils /sfm-utils
+
+COPY --from=intermediate /bda-pipeline-utilities/scripts /src/bda-pipeline-utilities/scripts
+COPY --from=intermediate /bda-pipeline-utilities/sfm-utils /src/bda-pipeline-utilities/sfm-utils
+
+COPY --from=intermediate /ind-bermuda-opensfm /src/ind-bermuda-opensfm
+WORKDIR /src/ind-bermuda-opensfm
+RUN pip3 install -r requirements.txt
+
+COPY --from=intermediate /bda-360-to-frames/build/360toFrames /src/bda-360-to-frames/360toFrames
+
+COPY --from=intermediate /bda-argo-workflows/tools /src/bda-argo-workflows/tools
+
+COPY --from=intermediate /bda-gpx-utils /src/bda-gpx-utils
+
+WORKDIR /src/bda-gpx-utils
+RUN pip3 install -r requirements.txt
+
+COPY --from=intermediate /openMVS/make/install /usr/local
+
+#ENV PATH="${PATH}:/:/OpenSfM/bin/:/360toFrames/build/:/urbaneng/:/PoissonRecon/Bin/Linux/:/usr/local/bin/OpenMVS/"
+ENV PATH="${PATH}:/src/bda-pipeline-utilities/:/src/bda-360-to-frames/:/src/ind-bermuda-opensfm/bin/:/usr/local/bin/OpenMVS/"

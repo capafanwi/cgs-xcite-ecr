@@ -1,0 +1,259 @@
+diff --git a/opensfm/actions/calculate_features.py b/opensfm/actions/calculate_features.py
+new file mode 100644
+index 00000000..72cd293e
+--- /dev/null
++++ b/opensfm/actions/calculate_features.py
+@@ -0,0 +1,23 @@
++from timeit import default_timer as timer
++import logging
++
++from opensfm import io
++from opensfm import matching
++from opensfm.dataset_base import DataSetBase
++
++logger: logging.Logger = logging.getLogger(__name__)
++
++
++def run_dataset(data: DataSetBase) -> None:
++    """Calculate Match features between image pairs."""
++
++    images = data.images()
++
++    start = timer()
++    pairs_matches, preport = matching.calculate_pairs_to_eval(
++        data, {}, images, images)
++    end = timer()
++    
++    logger.info("Time to calculate pairs %f" % (end - start))
++    logger.info("Number of pairs to match %d", len(pairs_matches))
++
+diff --git a/opensfm/actions/export_openmvs.py b/opensfm/actions/export_openmvs.py
+index 7d3edc8a..6f14b577 100644
+--- a/opensfm/actions/export_openmvs.py
++++ b/opensfm/actions/export_openmvs.py
+@@ -38,6 +38,8 @@ def export(reconstruction, tracks_manager, udata: UndistortedDataSet, export_onl
+             )
+             exporter.add_camera(str(camera.id), K, w, h)
+ 
++    shots_map = {}
++
+     for shot in reconstruction.shots.values():
+         if export_only is not None and shot.id not in export_only:
+             continue
+@@ -48,6 +50,8 @@ def export(reconstruction, tracks_manager, udata: UndistortedDataSet, export_onl
+             if not os.path.isfile(mask_path):
+                 mask_path = ""
+ 
++            shots_map[str(shot.id)] = shot
++
+             exporter.add_shot(
+                 str(os.path.abspath(image_path)),
+                 str(os.path.abspath(mask_path)),
+@@ -57,6 +61,18 @@ def export(reconstruction, tracks_manager, udata: UndistortedDataSet, export_onl
+                 shot.pose.get_origin(),
+             )
+ 
++    def positive_point_depth(point, shot_id):
++        if not shot_id in shots_map:
++            return False
++
++        shot = shots_map[shot_id]
++
++        # Is point in front of the camera?
++        is_behind = shot.pose.transform(point.coordinates)[2] > 0
++        if is_behind:
++            print("Removing shot %s - behind camera" % shot_id)
++        return is_behind
++
+     for point in reconstruction.points.values():
+         observations = tracks_manager.get_track_observations(point.id)
+ 
+@@ -65,6 +81,9 @@ def export(reconstruction, tracks_manager, udata: UndistortedDataSet, export_onl
+         else:
+             shots = list(observations)
+ 
++        if shots:
++            shots = [s for s in shots if positive_point_depth(point, s)]
++
+         if shots:
+             coordinates = np.array(point.coordinates, dtype=np.float64)
+             exporter.add_point(coordinates, shots)
+diff --git a/opensfm/commands/__init__.py b/opensfm/commands/__init__.py
+index 426afebd..e8362f6b 100644
+--- a/opensfm/commands/__init__.py
++++ b/opensfm/commands/__init__.py
+@@ -22,6 +22,7 @@ from . import (
+     reconstruct,
+     reconstruct_from_prior,
+     undistort,
++    calculate_features
+ )
+ from .command_runner import command_runner
+ 
+@@ -50,4 +51,5 @@ opensfm_commands = [
+     extend_reconstruction,
+     create_submodels,
+     align_submodels,
++    calculate_features
+ ]
+diff --git a/opensfm/commands/calculate_features.py b/opensfm/commands/calculate_features.py
+new file mode 100644
+index 00000000..7bae28d2
+--- /dev/null
++++ b/opensfm/commands/calculate_features.py
+@@ -0,0 +1,16 @@
++from opensfm.actions import calculate_features
++
++from . import command
++import argparse
++from opensfm.dataset import DataSet
++
++
++class Command(command.CommandBase):
++    name = "calculate_features"
++    help = "Calculates all pairs for match features"
++
++    def run_impl(self, dataset: DataSet, args: argparse.Namespace) -> None:
++        calculate_features.run_dataset(dataset)
++
++    def add_arguments_impl(self, parser: argparse.ArgumentParser) -> None:
++        return
+diff --git a/opensfm/dataset.py b/opensfm/dataset.py
+index 90aaf9b3..7f7ac17f 100644
+--- a/opensfm/dataset.py
++++ b/opensfm/dataset.py
+@@ -49,6 +49,8 @@ class DataSet(DataSetBase):
+         self.io_handler = io_handler
+         self.data_path = data_path
+         self.load_config()
++        
++        ## vvvv comment out for hx
+         self.load_image_list()
+         self.load_mask_list()
+ 
+diff --git a/opensfm/matching.py b/opensfm/matching.py
+index 55bf8ec6..18c98039 100644
+--- a/opensfm/matching.py
++++ b/opensfm/matching.py
+@@ -58,6 +58,37 @@ def match_images(
+     )
+ 
+ 
++def calculate_pairs_to_eval(
++    data: DataSetBase,
++    config_override: Dict[str, Any],
++    ref_images: List[str],
++    cand_images: List[str],
++) -> Tuple[List[Tuple[str, str]], Dict[str, Any]]:
++    """Perform pair matchings between two sets of images.
++
++    It will do matching for each pair (i, j), i being in
++    ref_images and j in cand_images, taking assumption that
++    matching(i, j) == matching(j ,i). This does not hold for
++    non-symmetric matching options like WORDS. Data will be
++    stored in i matching only.
++    """
++
++    # Get EXIFs data
++    all_images = list(set(ref_images + cand_images))
++    exifs = {im: data.load_exif(im) for im in all_images}
++
++    # Generate pairs for matching
++    pairs, preport = pairs_selection.match_candidates_from_metadata(
++        ref_images,
++        cand_images,
++        exifs,
++        data,
++        config_override,
++    )
++
++    return (pairs, preport)
++
++
+ def match_images_with_pairs(
+     data: DataSetBase,
+     config_override: Dict[str, Any],
+@@ -67,7 +98,8 @@ def match_images_with_pairs(
+ ) -> Dict[Tuple[str, str], List[Tuple[int, int]]]:
+     """Perform pair matchings given pairs."""
+     cameras = data.load_camera_models()
+-    args = list(match_arguments(pairs, data, config_override, cameras, exifs, poses))
++    args = list(match_arguments(
++        pairs, data, config_override, cameras, exifs, poses))
+ 
+     # Perform all pair matchings in parallel
+     start = timer()
+@@ -75,9 +107,11 @@ def match_images_with_pairs(
+     processes = config_override.get("processes", data.config["processes"])
+     mem_per_process = 512
+     jobs_per_process = 2
+-    processes = context.processes_that_fit_in_memory(processes, mem_per_process)
++    processes = context.processes_that_fit_in_memory(
++        processes, mem_per_process)
+     logger.info("Computing pair matching with %d processes" % processes)
+-    matches = context.parallel_map(match_unwrap_args, args, processes, jobs_per_process)
++    matches = context.parallel_map(
++        match_unwrap_args, args, processes, jobs_per_process)
+     logger.info(
+         "Matched {} pairs {} in {} seconds ({} seconds/pair).".format(
+             len(pairs),
+@@ -312,7 +346,8 @@ def _match_descriptors_guided_impl(
+         relative_pose,
+         overriden_config["guided_matching_threshold"],
+     )
+-    matches = match_brute_force_symmetric(d1, d2, overriden_config, epipolar_mask)
++    matches = match_brute_force_symmetric(
++        d1, d2, overriden_config, epipolar_mask)
+ 
+     # Adhoc filters
+     if overriden_config["matching_use_filters"]:
+@@ -559,7 +594,8 @@ def _match_robust_impl(
+ ) -> np.ndarray:
+     """Perform robust geometry matching on a set of matched descriptors indexes."""
+     # robust matching
+-    rmatches = robust_match(p1, p2, camera1, camera2, matches, overriden_config)
++    rmatches = robust_match(p1, p2, camera1, camera2,
++                            matches, overriden_config)
+     rmatches = np.array([[a, b] for a, b in rmatches])
+     return rmatches
+ 
+@@ -695,7 +731,8 @@ def match_flann(
+     """
+     search_params = dict(checks=config["flann_checks"])
+     results, dists = index.knnSearch(f2, 2, params=search_params)
+-    squared_ratio = config["lowes_ratio"] ** 2  # Flann returns squared L2 distances
++    # Flann returns squared L2 distances
++    squared_ratio = config["lowes_ratio"] ** 2
+     good = dists[:, 0] < squared_ratio * dists[:, 1]
+     return list(zip(results[good, 0], good.nonzero()[0]))
+ 
+@@ -741,7 +778,8 @@ def match_brute_force(
+     matcher = cv2.DescriptorMatcher_create(matcher_type)
+     matcher.add([f2])
+     if maskij is not None:
+-        matches = matcher.knnMatch(f1, k=2, masks=np.array([maskij]).astype(np.uint8))
++        matches = matcher.knnMatch(
++            f1, k=2, masks=np.array([maskij]).astype(np.uint8))
+     else:
+         matches = matcher.knnMatch(f1, k=2)
+ 
+@@ -776,7 +814,8 @@ def match_brute_force_symmetric(
+     """
+     matches_ij = [(a, b) for a, b in match_brute_force(fi, fj, config, maskij)]
+     maskijT = maskij.T if maskij is not None else None
+-    matches_ji = [(b, a) for a, b in match_brute_force(fj, fi, config, maskijT)]
++    matches_ji = [(b, a)
++                  for a, b in match_brute_force(fj, fi, config, maskijT)]
+ 
+     return list(set(matches_ij).intersection(set(matches_ji)))
+ 
+@@ -890,7 +929,8 @@ def robust_match_calibrated(
+     T = multiview.relative_pose_ransac(b1, b2, threshold, 1000, 0.999)
+ 
+     for relax in [4, 2, 1]:
+-        inliers = compute_inliers_bearings(b1, b2, T[:, :3], T[:, 3], relax * threshold)
++        inliers = compute_inliers_bearings(
++            b1, b2, T[:, :3], T[:, 3], relax * threshold)
+         if np.sum(inliers) < 8:
+             return np.array([])
+         iterations = config["five_point_refine_match_iterations"]

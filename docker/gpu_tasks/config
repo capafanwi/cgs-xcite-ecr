@@ -1,0 +1,6 @@
+Host github.com-det
+    Hostname github.com
+    IdentityFile=/home/cafanwi-cap/.ssh/id_deploy_det
+Host github.com-bpu
+    Hostname github.com
+    IdentityFile=/home/cafanwi-cap/.ssh/id_deploy_bpu

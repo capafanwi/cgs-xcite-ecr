@@ -34,7 +34,7 @@ jobs:
 
     - name: Commit updated files
       run: |
-        git config --global user.name 'capafanwi'
+        git config --global user.name 'cafanwi-cgs'
         git config --global user.email 'collins.afanwi@capgemini-gs.com'
         git add VERSION argo-artifacts/source-pipeline.yaml  argo-artifacts/recon-pipeline.yaml argo-artifacts/world-pipeline.yaml
         git commit -m "Bump versions to ${{ steps.bump_versions.outputs.new_version }}" || echo "No changes to commit"
