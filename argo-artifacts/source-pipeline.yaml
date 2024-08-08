@@ -32,7 +32,7 @@ spec:
       - name: logLocation
         value: "logs"
       - name: version
-        value: "2.1.39"
+        value: "2.1.42"
       - name: fileName
       - name: fileId
       - name: configFile
